@@ -50,7 +50,7 @@ sudo python3 scripts/omen-cli.py off
 sudo python3 scripts/omen-gui.py
 ```
 
-|<img width="400" height="300" alt="Omen RGB Keyboard Controller GUI" src="https://github.com/user-attachments/assets/c1f10238-3713-4fec-8738-4e96750c7384" />|
+|<img width="400" height="300" alt="Omen RGB Keyboard Controller GUI" src="https://github.com/user-attachments/assets/4a15485b-9bf8-4ddc-b97c-20d76883f551" />|
 |---|
 
 
