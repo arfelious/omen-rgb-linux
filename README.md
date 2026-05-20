@@ -50,6 +50,10 @@ sudo python3 scripts/omen-cli.py off
 sudo python3 scripts/omen-gui.py
 ```
 
+|<img width="400" height="300" alt="Omen RGB Keyboard Controller GUI" src="https://github.com/user-attachments/assets/c1f10238-3713-4fec-8738-4e96750c7384" />|
+|---|
+
+
 ## SDK Documentation
 
 The project includes a Python SDK (`OmenKeyboard`) to control keyboard lighting programmatically.
