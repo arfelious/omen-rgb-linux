@@ -488,9 +488,10 @@ class OmenGUI:
                 if name == "tab": w = 72
                 elif name == "caps_lock": w = 90
                 elif name == "l_shift": w = 110
-                elif name in ["l_ctrl", "fn", "l_win", "l_alt", "r_alt", "r_ctrl"]: w = 38
+                elif name in ["l_ctrl", "fn", "l_win", "l_alt"]: w = 45
+                elif name in ["r_alt", "r_ctrl"]: w = 33
                 if row_n == "row_0": w = (tr - mx - 13 * sp) // 14
-                if row_n == "row_5" and name == "space": w = (tr - 80) - x_off - 38*2 - sp*2
+                if row_n == "row_5" and name == "space": w = (tr - 120 - sp) - x_off - 33*2 - sp*2
                 if i == len(sk) - 1 and row_n != "row_5": w = tr - x_off
                 rid = self.canvas.create_rectangle(x_off, y_off, x_off+w, y_off+ch, fill="#252525", outline="#333333", tags=("key", name))
                 tid = self.canvas.create_text(x_off+w/2, y_off+ch/2, text=sym.get(name, name.replace("num_","").upper()), fill="#AAAAAA", font=("Outfit", 7, "bold"), state="disabled")
