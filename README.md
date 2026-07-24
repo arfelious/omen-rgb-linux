@@ -71,7 +71,7 @@ sudo python3 scripts/omen_cli.py lightbar off
 sudo python3 scripts/omen_gui.py
 ```
 
-|<img width="400" height="300" alt="Omen RGB Keyboard Controller GUI" src="https://github.com/user-attachments/assets/4a15485b-9bf8-4ddc-b97c-20d76883f551" />|
+|<img width="400" height="300" alt="Omen RGB Keyboard Controller GUI" src="https://github.com/user-attachments/assets/0731ca40-34a7-4b62-bdc9-6a62cfdcbb00" />|
 |---|
 
 
