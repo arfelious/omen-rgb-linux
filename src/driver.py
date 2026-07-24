@@ -116,5 +116,24 @@ class OmenKeyboard:
         # Mandatory double-apply for the commit packet
         self.device.write(bytes(commit))
 
+    def get_colors(self):
+        """
+        Returns a dict mapping key_name -> (R, G, B) based on current driver buffer state.
+        The physical keyboard USB HID interface is write-only and does not support querying hardware LED state.
+        """
+        key_colors = {}
+        r_buf = self.channels.get(0x05, bytearray(186))
+        g_buf = self.channels.get(0x06, bytearray(186))
+        b_buf = self.channels.get(0x07, bytearray(186))
+
+        for row in self.key_map.values():
+            for key_name, info in row.items():
+                offset = info.get("offset", 0)
+                if 0 <= offset < 186:
+                    key_colors[key_name] = (r_buf[offset], g_buf[offset], b_buf[offset])
+
+        return key_colors
+
     def close(self):
         self.device.close()
+

@@ -11,7 +11,10 @@ setup(
     ],
     entry_points={
         "console_scripts": [
+            "omen_cli=src.cli:main",
             "omen-cli=src.cli:main",
+            "omen_gui=src.gui:main",
+            "omen-gui=src.gui:main",
         ],
     },
 )

@@ -18,6 +18,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(BASE_DIR, 'src'))
 
 from driver import OmenKeyboard
+from lightbar import OmenLightbar
+
 
 class ModernDialog(tk.Toplevel):
     def __init__(self, parent, title, message, type="info", scroll_content=None):
@@ -64,6 +66,44 @@ class ModernDialog(tk.Toplevel):
 
         tk.Button(self, text="DISMISS", font=("Outfit", 10, "bold"), bg="#333333", fg="white", 
                   relief="flat", padx=30, pady=5, command=self.destroy).pack(pady=20)
+
+class ConfirmDialog(tk.Toplevel):
+    def __init__(self, parent, title, message, callback):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("400x220")
+        self.configure(bg="#1a1a1a")
+        self.callback = callback
+        self.transient(parent)
+        self.grab_set()
+        
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_rooty() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+
+        content = tk.Frame(self, bg="#1a1a1a", pady=15)
+        content.pack(expand=True, fill="both")
+
+        tk.Label(content, text=title.upper(), font=("Outfit", 13, "bold"), bg="#1a1a1a", fg="#FF9900").pack(pady=(0, 10))
+        tk.Label(content, text=message, font=("Outfit", 10), bg="#1a1a1a", fg="#AAAAAA", wraplength=340).pack(pady=5)
+
+        btn_frame = tk.Frame(self, bg="#1a1a1a", pady=10)
+        btn_frame.pack(fill="x")
+
+        tk.Button(btn_frame, text="OVERWRITE", font=("Outfit", 10, "bold"), bg="#FF4500", fg="white", 
+                  relief="flat", padx=15, pady=6, command=self.on_yes).pack(side="left", padx=30)
+        tk.Button(btn_frame, text="CANCEL", font=("Outfit", 10, "bold"), bg="#333333", fg="white", 
+                  relief="flat", padx=15, pady=6, command=self.on_no).pack(side="right", padx=30)
+
+    def on_yes(self):
+        self.destroy()
+        self.callback(True)
+
+    def on_no(self):
+        self.destroy()
+        self.callback(False)
+
 
 class ProfileDialog(tk.Toplevel):
     def __init__(self, parent, mode="load", callback=None):
@@ -131,7 +171,17 @@ class ProfileDialog(tk.Toplevel):
 
     def do_save(self):
         name = self.entry.get().strip()
-        if name:
+        if not name:
+            return
+        
+        target_file = os.path.join(self.p_dir, f"{name}.json")
+        if os.path.exists(target_file):
+            def on_confirm(confirmed):
+                if confirmed:
+                    self.callback(name)
+                    self.destroy()
+            ConfirmDialog(self, "Overwrite Profile?", f"A profile named '{name}' already exists. Overwrite it?", on_confirm)
+        else:
             self.callback(name)
             self.destroy()
 
@@ -165,11 +215,17 @@ class RainbowThread(threading.Thread):
             r, g, b = [int(x * 255) for x in colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)]
             self.kb.set_all(r, g, b)
             self.kb.apply()
+            if self.gui.lb and self.gui.lb.is_available():
+                try:
+                    self.gui.lb.set_static(r, g, b)
+                except Exception:
+                    pass
             with self.gui.state_lock:
                 for key in self.gui.key_items.keys():
                     self.gui.session_state[key] = (r, g, b)
                 self.gui.rainbow_dirty = True
             time.sleep(0.016)
+
 
     def stop(self):
         self.running = False
@@ -254,6 +310,8 @@ class OmenGUI:
         self.session_state = {} 
         self.key_items = {}
         self.state_lock = threading.Lock()
+        self.debounce_timer = None
+        self.save_timer = None
         
         self.rainbow_dirty = False
         self.pre_drag_selection = set()
@@ -280,11 +338,101 @@ class OmenGUI:
             print(f"Error: {e}")
             sys.exit(1)
             
-        for row in self.kb.key_map.values():
-            self.selected_keys.update(row.keys())
+        try:
+            self.lb = OmenLightbar()
+            self.has_lightbar = self.lb.is_supported()
+        except Exception as e:
+            print(f"Lightbar notice: {e}")
+            self.lb = None
+            self.has_lightbar = False
+
+        if self.has_lightbar:
+            self.lightbar_keys = ["lb_zone_1", "lb_zone_2", "lb_zone_3", "lb_zone_4"]
+        else:
+            self.lightbar_keys = []
             
+        self.selected_keys.clear()
+
+        self._init_session_state()
         self.setup_ui()
         self.root.bind("<KeyPress>", self.handle_keydown)
+
+    def _save_active_state(self):
+        try:
+            config_dir = os.path.expanduser("~/.config/omen-rgb-linux")
+            os.makedirs(config_dir, exist_ok=True)
+            state_file = os.path.join(config_dir, "state.json")
+            serializable_state = {k: list(v) for k, v in self.session_state.items()}
+            with open(state_file, "w") as f:
+                json.dump(serializable_state, f)
+        except Exception:
+            pass
+
+    def _schedule_state_save(self):
+        if getattr(self, "save_timer", None):
+            self.save_timer.cancel()
+        self.save_timer = threading.Timer(0.3, self._save_active_state)
+        self.save_timer.start()
+
+    def _load_active_state(self):
+        state_file = os.path.expanduser("~/.config/omen-rgb-linux/state.json")
+        if os.path.exists(state_file):
+            try:
+                with open(state_file, "r") as f:
+                    loaded = json.load(f)
+                for k, v in loaded.items():
+                    if isinstance(v, list) and len(v) == 3:
+                        self.session_state[k] = tuple(v)
+                return True
+            except Exception:
+                pass
+        return False
+
+
+    def _init_session_state(self):
+        # 1. Attempt to query live lightbar colors directly from hardware ACPI BIOS
+        lb_hardware_colors = None
+        if self.has_lightbar and self.lb:
+            try:
+                colors = self.lb.get_colors()
+                if colors:
+                    lb_hardware_colors = colors
+                    for i, color in enumerate(colors[:4], 1):
+                        self.session_state[f"lb_zone_{i}"] = color
+            except Exception as e:
+                print(f"Lightbar hardware query notice: {e}")
+
+        # 2. Load saved state for keyboard lighting
+        loaded = self._load_active_state()
+
+        # Prioritize live hardware lightbar colors over saved state.json file
+        if lb_hardware_colors:
+            for i, color in enumerate(lb_hardware_colors[:4], 1):
+                self.session_state[f"lb_zone_{i}"] = color
+
+        # 3. Fallback defaults if no saved state exists as keyboard color doesn't seem to be queriable
+        if not loaded:
+            fallback_color = (255, 153, 0)  # #ff9900
+            lb_first_zone = lb_hardware_colors[0] if (lb_hardware_colors and sum(lb_hardware_colors[0]) > 0) else None
+            base_color = lb_first_zone if lb_first_zone else fallback_color
+
+            if self.has_lightbar and not lb_hardware_colors:
+                for i in range(1, 5):
+                    self.session_state[f"lb_zone_{i}"] = fallback_color
+
+            for row in self.kb.key_map.values():
+                for k_name in row.keys():
+                    if k_name not in self.session_state:
+                        self.session_state[k_name] = base_color
+
+        # Sync all keyboard key colors from session_state into self.kb driver buffer
+        for k_name, color in self.session_state.items():
+            if k_name not in self.lightbar_keys:
+                try:
+                    self.kb.set_key_color(k_name, color[0], color[1], color[2])
+                except Exception:
+                    pass
+
 
     def gui_heartbeat(self):
         if self.rainbow_dirty:
@@ -300,6 +448,10 @@ class OmenGUI:
         sys.exit(0)
 
     def setup_ui(self):
+        canvas_h = 360 if self.has_lightbar else 300
+        win_h = 820 if self.has_lightbar else 750
+        self.root.geometry(f"1150x{win_h}")
+
         header_frame = tk.Frame(self.root, bg="#1a1a1a")
         header_frame.pack(fill="x", pady=(30, 0))
         
@@ -318,7 +470,8 @@ class OmenGUI:
         
         tk.Button(header_frame, text="LICENSE", bg="#222222", fg="#888888", font=("Outfit", 8), relief="flat", command=self.show_license).pack(side="right", padx=20, pady=(0, 20))
         
-        self.canvas = tk.Canvas(self.root, width=1050, height=450, bg="#1a1a1a", highlightthickness=0)
+        self.canvas = tk.Canvas(self.root, width=1050, height=canvas_h, bg="#1a1a1a", highlightthickness=0)
+
         self.canvas.pack(pady=(20, 5))
         self.canvas.bind("<ButtonPress-1>", self.on_click)
         self.canvas.bind("<B1-Motion>", self.on_drag)
@@ -338,7 +491,8 @@ class OmenGUI:
         
         btn_s = {"font": ("Outfit", 12, "bold"), "bg": "#333333", "fg": "white", "relief": "flat", "padx": 25, "pady": 12}
         tk.Button(controls, text="COLOR PICKER", command=lambda: ModernColorPicker(self.root, self.apply_custom_color), **btn_s).pack(side="left", padx=15)
-        tk.Button(controls, text="RAINBOW WAVE", command=self.toggle_rainbow, **btn_s).pack(side="left", padx=15)
+        self.rainbow_btn = tk.Button(controls, text="RAINBOW WAVE", command=self.toggle_rainbow, **btn_s)
+        self.rainbow_btn.pack(side="left", padx=15)
         tk.Button(controls, text="RESET SELECTION", command=self.clear_selection, **btn_s).pack(side="left", padx=15)
         
         profile_frame = tk.Frame(self.root, bg="#1a1a1a")
@@ -348,6 +502,13 @@ class OmenGUI:
         tk.Button(profile_frame, text="SAVE PROFILE", command=lambda: ProfileDialog(self.root, "save", self.save_profile), **prof_s).pack(side="left", padx=10)
         tk.Button(profile_frame, text="LOAD PROFILE", command=lambda: ProfileDialog(self.root, "load", self.load_profile), **prof_s).pack(side="left", padx=10)
 
+    def update_rainbow_button_state(self):
+        if getattr(self, "rainbow_btn", None):
+            if self.rainbow_thread and self.rainbow_thread.is_alive():
+                self.rainbow_btn.configure(bg="#00CCCC", fg="#000000", activebackground="#00EEEE", activeforeground="#000000")
+            else:
+                self.rainbow_btn.configure(bg="#333333", fg="white", activebackground="#444444", activeforeground="white")
+
     def toggle_rainbow(self):
         if self.rainbow_thread:
             self.rainbow_thread.stop()
@@ -355,19 +516,67 @@ class OmenGUI:
         else:
             self.rainbow_thread = RainbowThread(self.kb, self)
             self.rainbow_thread.start()
+        self.update_rainbow_button_state()
+
+    def _flush_hardware_writes(self, do_kb, do_lb):
+        with self.state_lock:
+            if do_kb:
+                try:
+                    for k, color in self.session_state.items():
+                        if k not in self.lightbar_keys:
+                            self.kb.set_key_color(k, color[0], color[1], color[2])
+                    self.kb.apply()
+                except Exception as e:
+                    print(f"Keyboard apply notice: {e}")
+
+            if do_lb and self.lb and self.has_lightbar:
+                try:
+                    lb_colors = [self.session_state.get(k, (0, 0, 0)) for k in self.lightbar_keys]
+                    self.lb.set_colors(lb_colors)
+                except Exception as e:
+                    print(f"Lightbar set colors notice: {e}")
+
+    def _schedule_hardware_write(self, do_kb, do_lb):
+        if getattr(self, "debounce_timer", None):
+            self.debounce_timer.cancel()
+        self.debounce_timer = threading.Timer(0.03, self._flush_hardware_writes, args=(do_kb, do_lb))
+        self.debounce_timer.start()
 
     def apply_custom_color(self, r, g, b):
         if self.rainbow_thread:
             self.rainbow_thread.stop()
             self.rainbow_thread = None
+            self.update_rainbow_button_state()
             
         with self.state_lock:
-            keys = self.selected_keys if self.selected_keys else self.key_items.keys()
-            for k in keys:
-                self.kb.set_key_color(k, r, g, b)
-                self.session_state[k] = (r, g, b)
-            self.kb.apply()
+            if self.selected_keys:
+                kb_keys = [k for k in self.selected_keys if k not in self.lightbar_keys]
+                lb_keys = [k for k in self.selected_keys if k in self.lightbar_keys]
+            else:
+                kb_keys = [k for k in self.key_items.keys() if k not in self.lightbar_keys]
+                lb_keys = list(self.lightbar_keys)
+
+            # 1. Update Keyboard state if targeted
+            if kb_keys:
+                for k in kb_keys:
+                    self.kb.set_key_color(k, r, g, b)
+                    self.session_state[k] = (r, g, b)
+
+            # 2. Update Lightbar state if targeted
+            if lb_keys and self.has_lightbar:
+                for k in lb_keys:
+                    self.session_state[k] = (r, g, b)
+
+            # Debounce hardware writes across 30ms window to prevent kernel/HID flooding
+            self._schedule_hardware_write(bool(kb_keys), bool(lb_keys and self.has_lightbar))
+
+            self._schedule_state_save()
             self.update_key_visuals()
+
+
+
+
+
 
     def show_license(self):
         try:
@@ -459,18 +668,30 @@ class OmenGUI:
             ModernDialog(self.root, "Error", "Fail", "error")
 
     def load_profile(self, name):
+        if self.rainbow_thread:
+            self.rainbow_thread.stop()
+            self.rainbow_thread = None
+            self.update_rainbow_button_state()
         try:
             p_dir = os.path.join(BASE_DIR, "profiles")
             with open(os.path.join(p_dir, f"{name}.json"), "r") as f:
                 self.session_state = json.load(f)
             for k, c in self.session_state.items():
-                self.kb.set_key_color(k, c[0], c[1], c[2])
+                if k not in self.lightbar_keys:
+                    self.kb.set_key_color(k, c[0], c[1], c[2])
             self.kb.apply()
+            if self.lb and self.lb.is_available():
+                try:
+                    lb_colors = [self.session_state.get(k, (0, 0, 0)) for k in self.lightbar_keys]
+                    self.lb.set_colors(lb_colors)
+                except Exception as e:
+                    print(f"Lightbar set colors error: {e}")
             with self.state_lock:
                 self.update_key_visuals()
             ModernDialog(self.root, "Success", f"Loaded: {name}", "info")
         except:
             ModernDialog(self.root, "Error", "No profile found!", "error")
+
 
     def draw_keyboard_init(self):
         mx, my, bw, sp = 156, 80, 36, 2
@@ -522,9 +743,24 @@ class OmenGUI:
                 self.key_items[k] = (rid, tid)
                 x_off += w + sp
             ny += 34 + sp
+
+        # Draw Bottom Lightbar (4 zones) if supported
+        if self.has_lightbar:
+            lb_y = my + 20 + sp + (34 + sp) * 5 + 15
+            lb_total_w = tr + sp * 2 + 4 * 34 + 3 * sp - mx
+            lb_zone_w = (lb_total_w - 3 * sp) // 4
+            lb_x = mx
+            for i, zone_name in enumerate(self.lightbar_keys, 1):
+                rid = self.canvas.create_rectangle(lb_x, lb_y, lb_x + lb_zone_w, lb_y + 24, fill="#252525", outline="#333333", tags=("key", zone_name))
+                tid = self.canvas.create_text(lb_x + lb_zone_w / 2, lb_y + 12, text=f"LIGHTBAR ZONE {i}", fill="#AAAAAA", font=("Outfit", 8, "bold"), state="disabled")
+                self.key_items[zone_name] = (rid, tid)
+                lb_x += lb_zone_w + sp
             
         with self.state_lock:
             self.update_key_visuals()
+
+
+
 
     def update_key_visuals(self):
         for name, (rid, tid) in self.key_items.items():
@@ -545,7 +781,11 @@ class OmenGUI:
     def set_preset(self, hc):
         self.apply_custom_color(int(hc[1:3], 16), int(hc[3:5], 16), int(hc[5:7], 16))
 
-if __name__ == "__main__":
+def main():
     root = tk.Tk()
     app = OmenGUI(root)
     root.mainloop()
+
+if __name__ == "__main__":
+    main()
+
