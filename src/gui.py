@@ -214,7 +214,9 @@ class RainbowThread(threading.Thread):
             self.hue = (self.hue + 0.003) % 1.0
             r, g, b = [int(x * 255) for x in colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)]
             self.kb.set_all(r, g, b)
-            self.kb.apply()
+            # persist=False: command 0x0a is an MCU flash write, not a commit, and this is a
+            # loop. _flush_hardware_writes() persists once when the user commits a change.
+            self.kb.apply(persist=False)
             if self.gui.lb and self.gui.lb.is_available():
                 try:
                     self.gui.lb.set_static(r, g, b)
