@@ -88,10 +88,10 @@ class OmenKeyboard:
             if d.get('interface_number') == 3:
                 target_path = d['path']
                 break
-
+        
         if not target_path:
             raise RuntimeError("Omen Keyboard Lighting Interface not found.")
-
+            
         self.device = hid.Device(path=target_path)
         # Buffer for each color channel (3 chunks of 62 bytes = 186 bytes)
         self.channels = {
@@ -99,12 +99,12 @@ class OmenKeyboard:
             0x06: bytearray(186), # Green
             0x07: bytearray(186)  # Blue
         }
-
+        
         if not key_map_path:
             # Traversal: src/driver.py -> src -> [ROOT]
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             key_map_path = os.path.join(base_dir, 'data', 'keys.json')
-
+            
         try:
             with open(key_map_path, 'r') as f:
                 self.key_map = json.load(f)
@@ -169,9 +169,9 @@ class OmenKeyboard:
         mapping = None
         for category in self.key_map.values():
             if key_name in category: mapping = category[key_name]; break
-
+        
         if not mapping: return False
-
+            
         offset = mapping["offset"]
         width = mapping.get("width", 1)
         for i in range(width):
@@ -182,7 +182,7 @@ class OmenKeyboard:
         # Link P key to P icon automatically
         if key_name == "p":
             self.set_key_color("p_icon", r, g, b)
-
+            
         return True
 
     def set_all(self, r, g, b):
@@ -216,11 +216,11 @@ class OmenKeyboard:
                 chunk_data = data[chunk_idx * 62 : (chunk_idx + 1) * 62]
                 report[2:64] = chunk_data
                 reports.append(report)
-
+        
         # Execute all reports
         for r in reports:
             self.device.write(bytes(r))
-
+        
         if persist:
             self.store_to_flash()
 

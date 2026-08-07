@@ -6,6 +6,10 @@ A high-fidelity, per-key lighting controller for the **HP Omen Max 16** keyboard
 - **SDK**: Python library for custom lighting scripts.
 - **CLI**: Control your keyboard from the terminal.
 - **GUI**: Control your keyboard with graphical interface.
+- **Hardware effects**: select one of the keyboard MCU's twelve built-in animations, and one of
+  the lightbar's nine, with a single report — they keep running after the process exits.
+
+The wire protocol is documented in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Installation & Usage
 
@@ -64,7 +68,49 @@ sudo python3 scripts/omen_cli.py lightbar static '#ff9900'
 sudo python3 scripts/omen_cli.py lightbar zones '#ff9900' '#00ff00' '#0000ff' '#ffff00'
 sudo python3 scripts/omen_cli.py lightbar zones 255 0 0 0 255 0 0 0 255 255 255 0
 sudo python3 scripts/omen_cli.py lightbar off
+
+# Hardware effects — the keyboard MCU renders these itself, one report, no host process
+python3 scripts/omen_cli.py effect list
+sudo python3 scripts/omen_cli.py effect set ghosting
+sudo python3 scripts/omen_cli.py effect set wave '#faac0f' '#0ffa36' --speed fast --direction left-to-right
+sudo python3 scripts/omen_cli.py effect set ripple --theme ocean --size large
+sudo python3 scripts/omen_cli.py effect set color-cycle --persist   # survives a reboot
+sudo python3 scripts/omen_cli.py effect show                        # read the MCU's state back
+sudo python3 scripts/omen_cli.py effect defaults                    # firmware lighting reset
+
+# The lightbar's own nine animations (a different numbering — see docs/PROTOCOL.md)
+python3 scripts/omen_cli.py lightbar animation list
+sudo python3 scripts/omen_cli.py lightbar animation wave --theme ocean --speed fast
+sudo python3 scripts/omen_cli.py lightbar animation swipe --theme custom '#ff0000' '#0000ff'
 ```
+
+### Hardware effects vs. `rainbow`
+
+`rainbow` is host-rendered: nine reports per frame, redrawn forever, and it stops when you do.
+`effect set color-cycle` asks the MCU for the same thing in one report and it keeps running with
+nothing attached. Prefer the effect engine unless you need per-key control of the pattern.
+
+Two effects need their arguments chosen with care, and render **black** otherwise — the CLI warns
+you, and [docs/PROTOCOL.md](docs/PROTOCOL.md) explains why:
+
+- `swipe` has no preset palette; give it custom colours.
+- `audio-pulse` is host-fed — `--inner` and `--outer` *are* the animation, and at 0 it draws
+  nothing. To make it react to audio you have to re-send the record from your own audio thread at
+  about 5 Hz.
+
+There is no working brightness command on this keyboard: HP's `0x0C` is refused by the firmware,
+and no effect consumes the record's brightness field. The Fn backlight key is the lever.
+
+### Checking the frames without a keyboard
+
+```bash
+python3 tests/test_frames.py
+```
+
+No hardware, no dependencies, no test framework. It stubs `hidapi` and compares the bytes this
+driver would send against frames transcribed from a USB capture of OMEN Gaming Hub driving the
+same device — so a change that stops matching HP's client fails here rather than on someone's
+desk.
 
 ### GUI
 ```bash
@@ -112,8 +158,42 @@ Set the color of all keys across the entire keyboard to a static color.
 - **Parameters**:
   - `r` (*int*), `g` (*int*), `b` (*int*): RGB channel values (0–255).
 
-#### `apply()`
-Commits and writes the buffered colors to the keyboard hardware. This performs the multi-channel transfer and commits the changes using the commit protocol.
+#### `apply(persist=True)`
+Writes the buffered colors to the keyboard hardware — nine colour pages, then command `0x0a`.
+
+`0x0a` is HP's `StoreLightingToFlash`: it writes **MCU flash**, which is why lighting survives a
+reboot. Anything drawing frames in a loop should pass `persist=False` so it is not writing flash
+tens of times a second. The colours still display; they just do not persist.
+
+#### `set_effect(setting, persist=False)`
+Select one of the MCU's twelve hardware-rendered animations. `setting` is an `EffectSetting` or
+just an effect name, in which case HP's own defaults for that effect are used.
+
+```python
+from src import OmenKeyboard, EffectSetting
+
+kb = OmenKeyboard()
+kb.set_effect("ghosting")                       # HP's defaults: Jungle, medium
+kb.set_effect(EffectSetting("wave",
+                            colors=[(0xFA, 0xAC, 0x0F), (0x0F, 0xFA, 0x36)],
+                            speed="fast",
+                            direction="left-to-right"))
+kb.set_effect(EffectSetting("ripple", show_mode="ocean", ripple_size="large"))
+
+for w in EffectSetting("swipe", show_mode="volcano").warnings():
+    print(w)                                    # "renders BLACK on a preset..."
+```
+
+One frame is all it takes: the animation runs with the process exited and nothing maintaining it.
+
+#### `get_effect()`
+Read the installed effect record back off the MCU (command `0x83`). Returns a decoded dict, or
+`None` if the device refused. This is real state — but it is the MCU's *merged* record, and a
+readback that matches what you wrote does not prove anything lit. Look at the keyboard as well.
+
+#### `get_device_info()` / `set_lighting_on(on)` / `restore_lighting_defaults()` / `store_to_flash()`
+Commands `0x80`, `0x09`, `0x10` and `0x0a`. `restore_lighting_defaults()` is a firmware-level
+lighting reset and is the thing to reach for if lighting ends up in a state nothing else clears.
 
 #### `close()`
 Closes the underlying HID device connection. It's recommended to call this to cleanly release system resources.
@@ -187,9 +267,19 @@ if result:
     colors, brightness = result
     print(f"Current lightbar colors: {colors}, brightness: {brightness}")
 
-# 4. Turn off lightbar
+# 4. Run one of the nine device-side animations
+lb.set_animation("wave", theme="ocean", speed="fast")
+lb.set_animation("swipe", theme="custom", colors=[(255, 0, 0), (0, 0, 255)])
+lb.set_animation("audio-pulse", theme="custom", colors=[(0, 0, 255), (255, 0, 255)],
+                 levels=(100, 100))   # the levels ARE the animation; feed them yourself
+
+# 5. Turn off lightbar
 lb.turn_off()
 ```
+
+> Ask this device for `#FFFFFE` rather than `#FFFFFF`. The firmware substitutes exactly two input
+> values, and `#FFFFFF` becomes a visibly purple-white `#FEA3DA`. `OmenLightbar` rewrites it for
+> you; set `AVOID_FIRMWARE_WHITE = False` to send values verbatim.
 
 
 
