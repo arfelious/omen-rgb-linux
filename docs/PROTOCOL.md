@@ -14,6 +14,11 @@ Two independent sources, in the order that mattered:
    (`StarmadeKbLightingEffectCommandHelper`), and `KbAnimationDefaultSetting_Voco.json`
    embedded in `HP.Omen.Core.Model.DataStructure.dll`. This is where the numbering, the enums
    and the per-effect defaults came from; a capture could never have produced them.
+3. **OGH's embedded layout resources**, extracted from the same assemblies — the `KBKeys*Data`
+   tables and `DeviceList.json`. These are the source of `data/keyboards.json`: which LED byte
+   belongs to which key, on which keyboard, on which board. They are *not* in a decompile,
+   because they are not code — `ilspycmd` does not emit embedded resources, so a grep of the
+   decompiled sources says this data does not exist.
 
 Then all twelve effects were written to real hardware and **looked at by a person**.
 
@@ -55,9 +60,9 @@ offsets and line up with the request: `[4]` is `payload[0]` either way.
 | Cmd | Name | Index | BLength | Payload |
 |---|---|---|---|---|
 | `0x03` | **SetLightingEffect** | target | **36** | 36-byte effect record, below |
-| `0x05` | static colour, red | page `0..2` | **0** | 60 bytes of the red key map |
-| `0x06` | static colour, green | page `0..2` | **0** | 60 bytes of the green key map |
-| `0x07` | static colour, blue | page `0..2` | **0** | 60 bytes of the blue key map |
+| `0x05` | static colour, red | page `0..2` | **0** | 60 bytes of the red LED map |
+| `0x06` | static colour, green | page `0..2` | **0** | 60 bytes of the green LED map |
+| `0x07` | static colour, blue | page `0..2` | **0** | 60 bytes of the blue LED map |
 | `0x09` | SetKeyboardLightingOnOff | 0 | 1 | `0` off, `1` on |
 | `0x0A` | **StoreLightingToFlash** | target | 2 | `AC 53` |
 | `0x0C` | SetKeyboardBrightness | 0 | 1 | physical value — **refused on this board** |
@@ -99,6 +104,136 @@ Every command is answered with the request echoed and a status at `[4],[5]`: `EC
 During one stuck-keyboard session every frame HP's own client sent was acknowledged and nothing
 displayed. Close a claim about this interface with two things: a `0x83` readback showing the
 field changed, *and* a person looking at the keyboard. Neither alone has been sufficient.
+
+## The static colour map — commands `0x05`/`0x06`/`0x07`
+
+One channel at a time, three pages of 60 bytes each, `BLength = 0`: nine frames repaint the
+whole keyboard. This driver's 186-byte channel buffer is exactly that, with the two `BLength`
+bytes at the head of each 62-byte page.
+
+**A map entry is an LED, not a key, and a key owns more than one.** This is the fact everything
+else in this section follows from. Measured by lighting positions one at a time: entries `0-9`
+light Esc, F1, F2, F3 and F4 — ten entries, five keys. Entry `0` is the LED under the *Esc*
+legend and entry `1` is the one nearer the bottom of the same keycap, so they are physically
+distinct LEDs on one cap rather than two bytes of one value. A uniform fill cannot show this,
+which is why 176 reads as a key count for as long as it does.
+
+Position → buffer offset is therefore not the identity, and the two `BLength` bytes are in the
+way:
+
+```
+position 0..59     buffer 2..61        page 0
+position 60..119   buffer 64..123      page 1
+position 120..179  buffer 126..185     page 2
+```
+
+Backspace straddles a page — positions `58` to `63` — so writing it as one contiguous run of
+buffer offsets puts colour bytes where the firmware expects a zero. `OmenKeyboard._offset` is
+the only place in this driver that knows about the chunking, for that reason.
+
+### 176 positions light up, 180 are transmitted
+
+`CreateStaticCMD` always sends three full 60-byte pages, but it copies only as many bytes as
+HP's own key array holds. On this board that array is 176 long, so OGH's third page carries 56
+colour bytes and four zeros — visible in the capture. HP's layout resource says the same thing
+from the other direction: it declares 180 elements and annotates the last four as *"some of the
+bytes are empty but fill it up here for easy control to UI"*.
+
+So 180 is the transmitted length and 176 is the useful one. (The v1 SDK's 144 is a third number
+and describes a different keyboard.)
+
+### Which LED belongs to which key
+
+HP ships the answer as data, not as code: `GetKeyLayout` loads an embedded JSON resource, one
+element per LED **in byte order**, shaped `[X, Y, Width, Height, Name]`, and every element
+carrying the same `Name` is one physical key. `data/keyboards.json` is derived from those
+tables — 48 layouts covering every per-key OMEN keyboard, keyed to 92 board ids. `omen-cli
+layouts` lists them.
+
+Three properties of the data are worth knowing before relying on it:
+
+- **The table says which key, never where on the key.** Every element of a key repeats the
+  *key's* rectangle, so intra-key order is a byte order and not a geometry — and it is not
+  consistent between rows. On Esc, position `0` is under the legend and `1` below it; on the
+  number row the digit takes the lower position and the shifted glyph the higher. Label them
+  "LED 1 of 2", not "top", unless someone has looked at that key.
+- **A key's positions are usually contiguous, and that is a property of this table rather than a
+  rule.** On the verified board `KeyP` is the sole exception: positions `81` **and** `175`, the
+  second being the illuminated glyph below the *P* legend. This driver used to carry that as a
+  separate `p_icon` key with a hardcoded link; HP groups them, so now `p` simply has two LEDs.
+- **`mi_04` cannot supply the grouping**, which is the obvious place to look. That interface's
+  HID LampArray reports 120 lamps against this map's 176 positions and the two enumerations are
+  not nested: only 46 of 99 keys have as many lamps as LEDs, every dual-legend key collapses to
+  one lamp, and eight keys — Omen, Calculator, Settings, Power, Fn, Copilot among them — have no
+  lamp at all while owning a live LED here. A UI built on the lamp map is a coarser board than
+  the hardware and cannot be refined into one.
+
+### Nothing in `0..175` is dead on this board
+
+HP's `SetNullBytes` zeroes part of the map, and *which* part depends on the firmware cycle, not
+on the model:
+
+| board / layout | resource | zeroed positions |
+|---|---|---|
+| Dojo / Vibrance, cycle ≤ 260 — **this board, 25C1** | `DojoKBKeysGlobalData.json` | `176–179` |
+| Dojo / Vibrance, cycle > 260, non-JP | `DojoKBKeysGlobalData26C1.json` | `137–138`, `146` |
+| Dojo / Vibrance, cycle > 260, JP | `DojoKBKeysJPData26C1.json` | `174–176`, `179` |
+
+`137` and `138` are `KeyDot`; `146` is the last cell of `KeyShiftR`. Applying the cycle > 260 row
+to a 25C1 board holds three working LEDs dark — a bug that is invisible unless you light those
+positions individually, because a uniform fill looks correct either way. This driver's key map
+names all three and is right to.
+
+That is also why layout detection reads the **DMI board name** (`/sys/class/dmi/id/board_name`,
+the same string Windows calls `Win32_BaseBoard.Product`) rather than the model. HP's own
+`DeviceList.json` ships SSIDs on both sides of the 26C1 boundary for the same device name, so
+the model alone would pick the wrong map. An unknown board keeps the verified layout and says
+so; guessing a near neighbour lights the wrong keys and looks like a working feature.
+
+**Only `Dojo/Global`, board 8D87, has been watched light up.** The other 47 layouts come out of
+the same tables by the same rule and nobody has seen one run — `omen-cli layouts` marks them
+unverified and so should anything else that offers them.
+
+## Fn, and which interface owns the picture
+
+Pressing Fn is a **device-side repaint**. The MCU owns the key matrix and the LEDs, so an Fn
+combination never reaches the host: while Fn is held the MCU draws its own overlay — the combo
+keys in purple, everything else dark — and on release it redraws the base layer **from its own
+state**. Its own state is the effect record and the static colour map above.
+
+So a picture written with `0x05`/`0x06`/`0x07` comes back after Fn with no host process running,
+and there is nothing to implement. There is also nothing to hook if you wanted to: the MCU's
+auto-report channel carries two button types, `LIGHTING_CHANGE` and `LED_ON_OFF`, and the Fn
+modifier is neither.
+
+**A picture painted on `mi_04` instead does not come back.** The HID LampArray frame is not part
+of the MCU's state, the MCU has nothing to restore it from, and no host is repainting — so the
+display stays on the overlay frame indefinitely: black keyboard, purple Fn combos. The property
+that makes `mi_04` attractive, one report that lands and holds, is the same property that makes
+it unrecoverable. Use it for a host-driven animation, which is repainting anyway; not for a
+picture that is meant to stay.
+
+### When everything acknowledges and nothing lights
+
+There is one device state that makes this whole interface look dead, and it is worth recognising
+before reaching for a hardware reset.
+
+A host that writes `AutonomousMode = 0` to the LampArray control report (feature report 6 on
+`mi_04`) tells the keyboard to stop drawing its own lighting and wait for host frames. Every
+colour page then acknowledges honestly and displays nothing — for HP's own client as much as for
+this one, which is the discriminator that identifies it.
+
+- **Nothing sets it back.** It is device state, it outlives the process that set it, and it
+  survives a reboot, because the internal USB bus stays powered.
+- **It is not readable.** Report 6 is write-only here, so the state is invisible to software.
+- **It can arrive from the other OS.** Windows Dynamic Lighting and OMEN control apps take host
+  control, and at least one has shipped without handing it back.
+
+    omen-cli unstick
+
+writes `AutonomousMode = 1` and hands the LEDs back. An AC disconnect with the power button held
+also clears it, by power-cycling the MCU — but it takes the BIOS defaults with it, so try the
+one-report version first.
 
 ## The effect record — command `0x03`
 

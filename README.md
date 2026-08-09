@@ -8,6 +8,10 @@ A high-fidelity, per-key lighting controller for the **HP Omen Max 16** keyboard
 - **GUI**: Control your keyboard with graphical interface.
 - **Hardware effects**: select one of the keyboard MCU's twelve built-in animations, and one of
   the lightbar's nine, with a single report — they keep running after the process exits.
+- **Per-LED addressing**: a key is not one LED. Dual-legend keys have two, Space has five,
+  backspace six, and each is individually addressable.
+- **48 keyboard layouts**, derived from OMEN Gaming Hub's own tables and keyed to 92 board ids,
+  so a board other than the one this was written on gets its own key map rather than a guess.
 
 The wire protocol is documented in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
@@ -62,6 +66,17 @@ sudo python3 scripts/omen_cli.py static 255 0 255
 sudo python3 scripts/omen_cli.py set-key esc '#ff0000'
 sudo python3 scripts/omen_cli.py rainbow
 sudo python3 scripts/omen_cli.py off
+
+# One LED rather than one key — Esc has two, and this lights only the lower one
+sudo python3 scripts/omen_cli.py set-led 1 '#ff0000'
+
+# Which keyboard is this, and what are its keys called
+python3 scripts/omen_cli.py layouts
+sudo python3 scripts/omen_cli.py keys
+sudo python3 scripts/omen_cli.py --layout Starmade/German static '#ff9900'
+
+# Everything acknowledges and nothing lights? Hand the LEDs back to the keyboard
+sudo python3 scripts/omen_cli.py unstick
 
 # Control Bottom Lightbar (supports hex codes or RGB integer components)
 sudo python3 scripts/omen_cli.py lightbar static '#ff9900'
@@ -132,29 +147,42 @@ If you are running scripts from the root directory or installing it locally, imp
 from src import OmenKeyboard
 ```
 
-#### Constructor: `OmenKeyboard(key_map_path=None)`
-Initializes the driver and connects to the keyboard.
+#### Constructor: `OmenKeyboard(key_map_path=None, layout=None)`
+Initializes the driver, connects to the keyboard, and works out which keyboard it is.
 - **Parameters**:
   - `key_map_path` (*str*, optional): Custom path to the `keys.json` file. If not provided, it defaults to `data/keys.json` relative to the package root.
+  - `layout` (*str*, optional): Force a layout id from `data/keyboards.json`, e.g. `"Dojo/JP"`. If not provided, the layout is detected from the DMI board name.
 - **Raises**:
   - `RuntimeError`: If the HP Gaming Keyboard II lighting interface cannot be found.
+  - `ValueError`: If `layout` names a layout the catalogue does not have.
+- **Attributes**: `layout` (the detected `Layout`), `board` (the DMI board name), `live_positions` (how many LED positions light up), and `layout_warning` — a string to show the user when the board was not recognised or its layout has never been verified on hardware, `None` otherwise.
 
 > Writing to raw USB devices requires root permissions by default on most Linux systems. Run your SDK scripts using `sudo python3 script.py` or configure appropriate `udev` rules.
 
 ### API Methods
 
 #### `set_key_color(key_name, r, g, b)`
-Set the RGB color of a specific key in the buffer.
+Set the RGB color of every LED of a key in the buffer.
 - **Parameters**:
-  - `key_name` (*str*): The identifier of the key to modify (e.g., `"esc"`, `"space"`, `"a"`, `"num_0"`). See [Key Mapping Reference](#key-mapping-reference) for details.
+  - `key_name` (*str*): The identifier of the key to modify (e.g., `"esc"`, `"space"`, `"a"`, `"num_0"`). HP's own names work too (`"KeyEsc"`). See [Key Mapping Reference](#key-mapping-reference) for details.
   - `r` (*int*): Red channel value (0–255).
   - `g` (*int*): Green channel value (0–255).
   - `b` (*int*): Blue channel value (0–255).
-- **Returns**: `bool` – `True` if the key exists and the color was set; `False` otherwise.
-- **Notes**: Setting the color of the `"p"` key automatically applies the same color to the `"p_icon"` special logo key.
+- **Returns**: `bool` – `True` if the key exists on this keyboard and the color was set; `False` otherwise.
+- **Notes**: A key owns as many LEDs as it has, and all of them take the colour. The `"p"` key owns the logo beneath it, which HP's table groups with it — the old separate `"p_icon"` name still resolves.
+
+#### `set_led_color(position, r, g, b)`
+Set the RGB color of a single LED, addressed by colour-map position rather than by key. This is how one printed legend of a dual-legend key takes its own colour.
+- **Parameters**:
+  - `position` (*int*): Colour-map position, `0` to `live_positions - 1` (176 positions on 8D87).
+  - `r` (*int*), `g` (*int*), `b` (*int*): RGB channel values (0–255).
+- **Returns**: `bool` – `True` if the position is on the map; `False` otherwise.
+
+#### `key_leds(key_name)` / `keys()`
+`key_leds` returns the list of colour-map positions a key owns, or `None` if this keyboard has no such key. `keys()` returns every key name, in colour-map order.
 
 #### `set_all(r, g, b)`
-Set the color of all keys across the entire keyboard to a static color.
+Set the color of every LED across the entire keyboard to a static color.
 - **Parameters**:
   - `r` (*int*), `g` (*int*), `b` (*int*): RGB channel values (0–255).
 
@@ -285,18 +313,44 @@ lb.turn_off()
 
 ### Key Mapping Reference
 
-Key names are mapped to hardware offsets in `data/keys.json`. Available keys are organized in the following categories:
+Key names are mapped to the LED positions they own in `data/keys.json`. Available keys are organized in the following categories:
 
 - **Row 0–5**: Standard keyboard rows (e.g. `"esc"`, `"f1"`, `"tilde"`, `"1"`, `"tab"`, `"q"`, `"caps_lock"`, `"a"`, `"l_shift"`, `"z"`, `"l_ctrl"`, `"space"` etc.)
 - **Navigation**: `"left"`, `"up"`, `"down"`, `"right"`
 - **Numpad**: `"num_lock"`, `"num_0"` through `"num_9"`, `"num_plus"`, `"num_enter"`, etc.
-- **Special keys**: `"omen"`, `"calculator"`, `"settings"`, `"power"`, `"p_icon"` (The icon beneath the P key)
+- **Special keys**: `"omen"`, `"calculator"`, `"settings"`, `"power"`
+
+`sudo omen_cli keys` prints the list with the LED positions of each. Two details are worth
+knowing before you write against it:
+
+- **A key is not an LED.** Most keys own one; a key with two printed legends owns two, Space
+  owns five and backspace six. `set_key_color` colours all of a key's LEDs; `set_led_color`
+  colours one. Which LED of a pair is the upper legend is not in HP's data — the tables give
+  every LED of a key the key's own rectangle — so it takes one `set-led` and a look.
+- **`"p"` owns the illuminated logo below it**, positions 81 and 175. HP's table groups them,
+  so it is one key with two LEDs rather than a key plus a `p_icon`; the old name still resolves
+  for saved profiles. The bottom-row key right of the right Alt is HP's `KeyCopliot`, named
+  `"copilot"` here; `"r_ctrl"` still resolves to it.
 
 ## Device Support & Contributions
 
-Currently, this program specifically targets the **HP Gaming Keyboard II (0d62:54bf)** with **per-key** RGB lighting. 
+This program targets HP keyboards with **per-key** RGB lighting behind the **HP Gaming Keyboard
+II (0d62:54bf)** MCU interface.
 
-Support for **4-zone Omen/Victus/Omen Max keyboards** may be added in the future if a tester with the physical device is found to verify drivers. If you own a 4-zone Omen keyboard and are willing to help test, please contact **arfelious@proton.me**.
+`data/keyboards.json` carries the key maps for **48 OMEN keyboards across 92 board ids**,
+derived from OMEN Gaming Hub's own embedded layout tables. Layout detection reads the DMI board
+name and picks from that table; `omen_cli layouts` shows what it found and what else is there.
+
+**Only one of the 48 has been watched light up** — `Dojo/Global`, board 8D87, the OMEN MAX 16
+this was written on. The rest come out of the same tables by the same rule and nobody has run
+one, which is what the *unverified* marking means. If you have another OMEN and are willing to
+try `--layout`, a report either way is useful: the failure mode is not a crash, it is the wrong
+keys lighting up.
+
+Support for **4-zone Omen/Victus/Omen Max keyboards** is a different transport entirely (WMI,
+not HID) and may be added in the future if a tester with the physical device is found to verify
+drivers. If you own a 4-zone Omen keyboard and are willing to help test, please contact
+**arfelious@proton.me**.
 
 ## Disclaimer
 
