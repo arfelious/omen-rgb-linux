@@ -21,12 +21,13 @@ def rainbow():
     keys = {}
     for category in kb.key_map.values():
         keys.update(category)
-        
+
     if not keys:
         print("No keys found in key_map!")
         return
-        
-    sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["offset"])
+
+    # Colour-map order, which runs roughly left to right and top to bottom across the board.
+    sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["leds"][0])
     
     print(f"Starting Rainbow on {len(sorted_keys)} keys...")
     

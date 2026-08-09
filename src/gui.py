@@ -697,22 +697,31 @@ class OmenGUI:
 
     def draw_keyboard_init(self):
         mx, my, bw, sp = 156, 80, 36, 2
-        sym = {"tilde": "`", "minus": "-", "equal": "=", "backspace": "BSP", "tab": "TAB", "l_bracket": "[", "r_bracket": "]", "backslash": "\\", "caps_lock": "CAPS", "semicolon": ";", "quote": "'", "enter": "ENTER", "l_shift": "SHIFT", "comma": ",", "dot": ".", "slash": "/", "r_shift": "SHIFT", "l_ctrl": "CTRL", "l_win": "WIN", "l_alt": "ALT", "space": "SPACE", "r_alt": "ALT", "r_ctrl": "CTRL", "num_lock": "NUM", "num_slash": "/", "num_star": "*", "num_minus": "-", "num_plus": "+", "num_enter": "ENT", "num_dot": ".", "omen": "◆", "calculator": "田", "settings": "⚙", "power": "⏻"}
+        sym = {"tilde": "`", "minus": "-", "equal": "=", "backspace": "BSP", "tab": "TAB", "l_bracket": "[", "r_bracket": "]", "backslash": "\\", "caps_lock": "CAPS", "semicolon": ";", "quote": "'", "enter": "ENTER", "l_shift": "SHIFT", "comma": ",", "dot": ".", "slash": "/", "r_shift": "SHIFT", "l_ctrl": "CTRL", "l_win": "WIN", "l_alt": "ALT", "space": "SPACE", "r_alt": "ALT", "copilot": "CPLT", "num_lock": "NUM", "num_slash": "/", "num_star": "*", "num_minus": "-", "num_plus": "+", "num_enter": "ENT", "num_dot": ".", "omen": "◆", "calculator": "田", "settings": "⚙", "power": "⏻"}
         tr = mx + (15 * bw) + (14 * sp)
         y_off = my
-        
+
+        # These rows are the verified board's. Another layout addresses fine through the CLI but
+        # has no drawing here, so say that rather than showing an empty canvas.
+        if not any(r in self.kb.key_map for r in ("row_0", "row_1")):
+            self.canvas.create_text(
+                525, 120, fill="#AAAAAA", font=("Outfit", 10),
+                text=f"No key picture for layout {self.kb.layout.id if self.kb.layout else '?'}.\n"
+                     f"Use the CLI: omen-cli keys")
+            return
+
         for row_n in ["row_0", "row_1", "row_2", "row_3", "row_4", "row_5"]:
             if row_n not in self.kb.key_map:
                 continue
             x_off, ch = mx, (20 if row_n == "row_0" else 34)
-            sk = sorted(self.kb.key_map[row_n].items(), key=lambda x: x[1]["offset"])
+            sk = sorted(self.kb.key_map[row_n].items(), key=lambda x: x[1]["leds"][0])
             for i, (name, data) in enumerate(sk):
                 w = bw
                 if name == "tab": w = 72
                 elif name == "caps_lock": w = 90
                 elif name == "l_shift": w = 110
                 elif name in ["l_ctrl", "fn", "l_win", "l_alt"]: w = 45
-                elif name in ["r_alt", "r_ctrl"]: w = 33
+                elif name in ["r_alt", "copilot"]: w = 33
                 if row_n == "row_0": w = (tr - mx - 13 * sp) // 14
                 if row_n == "row_5" and name == "space": w = (tr - 120 - sp) - x_off - 33*2 - sp*2
                 if i == len(sk) - 1 and row_n != "row_5": w = tr - x_off

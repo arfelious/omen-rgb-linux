@@ -46,6 +46,7 @@ _fake_hid.enumerate = lambda vid=0, pid=0: [{"interface_number": 3, "path": b"fa
 sys.modules["hid"] = _fake_hid
 
 import effects as fx                      # noqa: E402
+import layouts as kbl                     # noqa: E402
 from driver import OmenKeyboard           # noqa: E402
 from lightbar import OmenLightbar, LB_ANIMATIONS   # noqa: E402
 
@@ -208,8 +209,143 @@ def test_apply_persist():
     kb.close()
 
 
+def test_colour_map_positions():
+    print("the colour map is addressed by LED position, not by buffer offset")
+    kb = OmenKeyboard(key_map_path=os.path.join(ROOT, "data", "keys.json"))
+
+    # The two BLength bytes at the head of each page are not map positions, so position 60 is
+    # buffer offset 64. Getting this wrong is invisible until a key straddles a page.
+    check("position 0 -> offset 2", 2, kb._offset(0))
+    check("position 59 -> offset 61", 61, kb._offset(59))
+    check("position 60 -> offset 64", 64, kb._offset(60))
+    check("position 120 -> offset 126", 126, kb._offset(120))
+    check("position 179 -> offset 185", 185, kb._offset(179))
+    check("180 is off the end", None, kb._offset(180))
+
+    # Backspace is positions 58..63, which crosses the page-0/page-1 boundary. Written as one
+    # run of buffer offsets it lands on the BLength bytes and declares a length on a page that
+    # must declare zero.
+    check("backspace owns six LEDs across a page boundary", [58, 59, 60, 61, 62, 63],
+          kb.key_leds("backspace"))
+
+    kb.set_all(0, 0, 0)
+    kb.set_key_color("backspace", 0xFF, 0xFF, 0xFF)
+    kb.device.writes.clear()
+    kb.apply(persist=False)
+    check("BLength stays zero on every page with backspace lit",
+          {(0, 0)}, {(w[2], w[3]) for w in kb.device.writes})
+
+    red = b"".join(w[4:] for w in kb.device.writes[:3])
+    check("and exactly those six positions are lit",
+          [58, 59, 60, 61, 62, 63], [i for i, v in enumerate(red) if v])
+    kb.close()
+
+
+def test_live_positions():
+    print("176 positions light up; the four transmitted after them are padding")
+    kb = OmenKeyboard(key_map_path=os.path.join(ROOT, "data", "keys.json"))
+    check("live positions", 176, kb.live_positions)
+    check("transmitted positions", 180, kb.TRANSMITTED_POSITIONS)
+
+    kb.set_all(0x40, 0x50, 0x60)
+    kb.device.writes.clear()
+    kb.apply(persist=False)
+    red = b"".join(w[4:] for w in kb.device.writes[:3])
+    check("176 colour bytes", bytes([0x40] * 176), red[:176])
+    # HP's third page is 56 colour bytes and four zeros - the capture shows it, and its own
+    # layout resource calls 176-179 padding.
+    check("four zeros after them", bytes(4), red[176:180])
+    check("one LED per position on this board", 176, len(kb.get_led_colors()))
+    kb.close()
+
+
+def test_key_map_matches_the_catalog():
+    print("data/keys.json is HP's own grouping for the board it claims to be")
+    catalog = kbl.Catalog(os.path.join(ROOT, "data", "keyboards.json"))
+    names = kbl.KeyNames(os.path.join(ROOT, "data", "keys.json"))
+    layout = catalog.by_id(names.layout_id)
+
+    check("the layout it names exists", True, layout is not None)
+    check("it is the one that has been verified on hardware", True, layout.verified)
+
+    friendly = {}
+    for group in names.rows.values():
+        for name, info in group.items():
+            friendly[info["hp"]] = info["leds"]
+
+    check("same keys as HP's table", set(), set(friendly) ^ {k.name for k in layout.keys})
+    mismatched = {k.name: (k.leds, friendly[k.name])
+                  for k in layout.keys if friendly[k.name] != k.leds}
+    check("same LEDs for every key", {}, mismatched)
+
+    covered = sorted(p for leds in friendly.values() for p in leds)
+    check("every live position is reachable", list(range(layout.leds)), covered)
+
+    # The two names this project chose before HP's tables settled what the keys are. Both are
+    # kept resolvable so saved profiles and ~/.config state files do not silently stop working.
+    check("p owns the logo beneath it", [81, 175], friendly["KeyP"])
+    check("p_icon still resolves", "KeyP", names.to_hp["p_icon"])
+    check("r_ctrl still resolves, to the Copilot key", "KeyCopliot", names.to_hp["r_ctrl"])
+
+
+def test_catalog_integrity():
+    print("every layout in the catalogue covers its own map exactly once")
+    catalog = kbl.Catalog(os.path.join(ROOT, "data", "keyboards.json"))
+    check("48 layouts", 48, len(catalog.layouts))
+    check("92 boards", 92, len(catalog.boards))
+    check("exactly one is verified", ["Dojo/Global"],
+          sorted(l.id for l in catalog.layouts.values() if l.verified))
+
+    # A position claimed twice means two keys fight over one LED; a position claimed by nobody
+    # means a light no caller can reach. Both were real bugs in the Windows sibling of this map.
+    duplicated, unreachable = {}, {}
+    for layout in catalog.layouts.values():
+        seen = [p for k in layout.keys for p in k.leds]
+        if len(seen) != len(set(seen)):
+            duplicated[layout.id] = len(seen) - len(set(seen))
+        # Dojo26C1 is the exception, and deliberately: that firmware blanks 137, 138 and 146
+        # mid-map, so those three are absent rather than dark.
+        missing = [p for p in range(layout.leds) if p not in set(seen)]
+        if missing and not layout.id.startswith("Dojo26C1"):
+            unreachable[layout.id] = missing
+    check("no position claimed by two keys", {}, duplicated)
+    check("no position unreachable", {}, unreachable)
+    check("the 26C1 firmware's blanked positions are the only gaps",
+          [137, 138, 146],
+          [p for p in range(176)
+           if p not in {q for k in catalog.by_id("Dojo26C1/Global").keys for q in k.leds}])
+
+    # This board ships on both sides of HP's cycle boundary under one device name, which is why
+    # detection is by board id: the two firmwares blank different positions.
+    check("8D87 is a 25C1 Dojo", ("Dojo", "25C1"),
+          (catalog.boards["8D87"]["layout"], catalog.boards["8D87"]["cycle"]))
+    check("and it resolves to the verified layout", "Dojo/Global", catalog.for_board("8D87").id)
+    check("an unknown board resolves to nothing rather than a near miss",
+          None, catalog.for_board("FFFF"))
+
+
+def test_other_layouts_are_addressable():
+    print("a keyboard other than this one can be driven by name")
+    kb = OmenKeyboard(key_map_path=os.path.join(ROOT, "data", "keys.json"),
+                      layout="Starmade/German")
+    check("layout selected", "Starmade/German", kb.layout.id)
+    check("and it is flagged unverified", False, kb.layout.verified)
+    check("live positions follow the layout", 167, kb.live_positions)
+    check("friendly names still resolve", True, kb.key_leds("space") is not None)
+    check("HP's names resolve too", kb.key_leds("space"), kb.key_leds("KeySpace"))
+    check("a key this keyboard does not have returns nothing", None, kb.key_leds("num_0"))
+
+    kb.set_all(0x10, 0x20, 0x30)
+    kb.device.writes.clear()
+    kb.apply(persist=False)
+    red = b"".join(w[4:] for w in kb.device.writes[:3])
+    check("167 colour bytes, then zeros", (bytes([0x10] * 167), bytes(13)),
+          (red[:167], red[167:180]))
+    kb.close()
+
+
 def test_apply_layout_unchanged():
-    print("apply() still produces exactly the bytes it did before this change")
+    print("apply() still frames the buffer the way it always did")
     kb = OmenKeyboard(key_map_path=os.path.join(ROOT, "data", "keys.json"))
     dev = kb.device
     kb.set_all(0xAB, 0xCD, 0xEF)
@@ -292,6 +428,11 @@ if __name__ == "__main__":
         test_black_screen_warnings,
         test_frame_header,
         test_apply_persist,
+        test_colour_map_positions,
+        test_live_positions,
+        test_key_map_matches_the_catalog,
+        test_catalog_integrity,
+        test_other_layouts_are_addressable,
         test_apply_layout_unchanged,
         test_lightbar_static_unchanged,
         test_lightbar_animation,

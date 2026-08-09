@@ -13,9 +13,10 @@ import glob
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(BASE_DIR, 'src'))
 
-from driver import OmenKeyboard
+from driver import OmenKeyboard, restore_device_lighting_control
 from lightbar import OmenLightbar, LB_ANIMATIONS, LB_THEMES, LB_SPEEDS, LB_DIRECTIONS
 import effects as fx
+import layouts as kbl
 
 def _parse_single_hex(s):
     s = str(s).strip()
@@ -104,11 +105,15 @@ def _update_active_state(updates):
         print(f"State save notice: {e}")
 
 def _get_all_keyboard_keys(kb):
-    keys = []
-    for row in kb.key_map.values():
-        for k_name in row.keys():
-            keys.append(k_name)
-    return keys
+    return kb.keys()
+
+
+def _sorted_key_names(kb):
+    """Every key, in colour-map order - which is roughly reading order across the board."""
+    keys = {}
+    for cat in kb.key_map.values():
+        keys.update(cat)
+    return sorted(keys, key=lambda k: keys[k]["leds"][0])
 
 
 def cmd_static(kb, args):
@@ -124,16 +129,70 @@ def cmd_static(kb, args):
 def cmd_set_key(kb, args):
     colors = parse_color_list(args.color, expected_count=1)
     r, g, b = colors[0]
-    success = kb.set_key_color(args.key, r, g, b)
-    if success:
-        kb.apply()
-        print(f"Set key '{args.key}' to RGB({r}, {g}, {b})")
-        updates = {args.key: (r, g, b)}
-        if args.key == "p":
-            updates["p_icon"] = (r, g, b)
-        _update_active_state(updates)
+    leds = kb.key_leds(args.key)
+    if not leds:
+        print(f"Error: Key '{args.key}' is not on this keyboard. Try: omen-cli keys")
+        return
+    kb.set_key_color(args.key, r, g, b)
+    kb.apply()
+    plural = "" if len(leds) == 1 else f", {len(leds)} LEDs"
+    print(f"Set key '{args.key}' to RGB({r}, {g}, {b}){plural}")
+    _update_active_state({args.key: (r, g, b)})
+
+
+def cmd_set_led(kb, args):
+    colors = parse_color_list(args.color, expected_count=1)
+    r, g, b = colors[0]
+    if not kb.set_led_color(args.position, r, g, b):
+        print(f"Error: position {args.position} is outside the colour map "
+              f"(0..{kb.live_positions - 1} light up on this keyboard).")
+        return
+    kb.apply()
+    print(f"Set LED position {args.position} to RGB({r}, {g}, {b})")
+
+
+def cmd_keys(kb, args):
+    print(kbl.describe(kb.layout, kb.board))
+    print()
+    for group, keys in kb.key_map.items():
+        print(f"{group}:")
+        for name, info in sorted(keys.items(), key=lambda kv: kv[1]["leds"][0]):
+            leds = ",".join(str(p) for p in info["leds"])
+            hp = "" if info["hp"] == name else f"  ({info['hp']})"
+            print(f"  {name:<12} LED {leds}{hp}")
+    print()
+    print("A key is not an LED. Colour one legend of a two-legend key with 'set-led'.")
+
+
+def cmd_layouts(kb, args):
+    catalog = kbl.Catalog()
+    board = kbl.board_id()
+    print(f"This machine's DMI board name: {board or 'unreadable'}")
+    entry = catalog.board(board)
+    if entry:
+        print(f"  {entry['display']} - HP device '{entry['device']}', "
+              f"cycle {entry['cycle'] or 'unrecorded'}, layout {entry['layout']}")
     else:
-        print(f"Error: Key '{args.key}' not found in key map.")
+        print("  not in the catalogue")
+    print(f"\n{len(catalog.layouts)} layouts, {len(catalog.boards)} boards known.\n")
+    for layout in sorted(catalog.layouts.values(),
+                         key=lambda l: (not l.verified, l.id)):
+        mark = "verified" if layout.verified else "unverified"
+        print(f"  {layout.id:<32} {layout.leds:>3} LEDs  {len(layout.keys):>3} keys  {mark}")
+    print("\nOnly Dojo/Global has been watched light up. The rest are derived from HP's own")
+    print("tables by the same rule and have never been run; pass one with --layout to try it.")
+
+
+def cmd_unstick(kb, args):
+    print("Writing AutonomousMode = 1 to the mi_04 LampArray control report.")
+    print("This tells the keyboard to go back to drawing its own lighting.")
+    count = restore_device_lighting_control()
+    if count:
+        print(f"Accepted by {count} interface(s). Look at the keyboard - an accepted feature")
+        print("report is not a lit keyboard, and report 6 cannot be read back.")
+    else:
+        print("No LampArray interface accepted it. mi_04 may not be exposed, or hidraw")
+        print("permissions may be missing - see the udev rule in the README.")
 
 def cmd_off(kb, args):
     print("Turning off all lights.")
@@ -202,10 +261,7 @@ def cmd_rainbow(kb, args):
     print("Starting rainbow wave. Press Ctrl+C to stop.")
     print("Tip: 'effect set color-cycle' runs a rainbow in hardware, with no process at all.")
 
-    keys = {}
-    for cat in kb.key_map.values():
-        keys.update(cat)
-    sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["offset"])
+    sorted_keys = _sorted_key_names(kb)
 
     t = 0
     try:
@@ -360,7 +416,9 @@ def cmd_lightbar(args):
         _update_active_state(updates)
 
 def cmd_all(args):
-    kb = OmenKeyboard()
+    kb = OmenKeyboard(layout=getattr(args, "layout", None))
+    if kb.layout_warning:
+        print(f"note: {kb.layout_warning}")
     lb = None
     has_lb = False
     try:
@@ -413,10 +471,7 @@ def cmd_all(args):
     elif args.all_cmd == "rainbow":
         import colorsys
         print("Starting rainbow wave across keyboard" + (" and lightbar" if has_lb else "") + ". Press Ctrl+C to stop.")
-        keys = {}
-        for cat in kb.key_map.values():
-            keys.update(cat)
-        sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["offset"])
+        sorted_keys = _sorted_key_names(kb)
         t = 0
         try:
             while True:
@@ -443,6 +498,10 @@ def cmd_all(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Omen RGB Linux CLI")
+    parser.add_argument(
+        "--layout", metavar="ID",
+        help="Force a keyboard layout from data/keyboards.json (see 'layouts') instead of "
+             "detecting one from the DMI board name")
     subparsers = parser.add_subparsers(dest="command")
 
     # All (keyboard + lightbar if present)
@@ -466,6 +525,21 @@ def main():
     p_key = subparsers.add_parser("set-key", help="Set color for a single key")
     p_key.add_argument("key", help="Name of the key (e.g. esc, a, space)")
     p_key.add_argument("color", nargs="+", help="Color as hex (#ff9900) or RGB components (255 153 0)")
+
+    # Set one LED. A key with two printed legends has two of them.
+    p_led = subparsers.add_parser(
+        "set-led", help="Set color for a single LED, by colour-map position")
+    p_led.add_argument("position", type=int, help="Colour-map position (0..175 on 8D87)")
+    p_led.add_argument("color", nargs="+", help="Color as hex (#ff9900) or RGB components")
+
+    # Keys and keyboards
+    subparsers.add_parser("keys", help="List this keyboard's keys and the LEDs of each")
+    subparsers.add_parser("layouts", help="List every keyboard layout, and which one this is")
+
+    # Recovery
+    subparsers.add_parser(
+        "unstick", help="Hand the LEDs back to the keyboard when everything acknowledges "
+                        "and nothing lights")
 
     # Profile
     p_profile = subparsers.add_parser("profile", help="Apply a saved profile")
@@ -532,7 +606,7 @@ def main():
     lb_anim.add_argument("--bass", type=int, default=0, help="Audio Pulse bass level (0-255)")
 
     args = parser.parse_args()
-    
+
     if not args.command:
         parser.print_help()
         return
@@ -556,6 +630,14 @@ def main():
             cmd_list(None, args)
             return
 
+        if args.command == "layouts":
+            cmd_layouts(None, args)     # a table, not a device operation
+            return
+
+        if args.command == "unstick":
+            cmd_unstick(None, args)     # the device this talks to is mi_04, not mi_03
+            return
+
         if args.command == "effect":
             if not args.fx_cmd:
                 p_effect.print_help()
@@ -564,11 +646,18 @@ def main():
                 cmd_effect(None, args)   # a table, not a device operation
                 return
 
-        kb = OmenKeyboard()
+        kb = OmenKeyboard(layout=args.layout)
+        if kb.layout_warning:
+            print(f"note: {kb.layout_warning}")
+
         if args.command == "static":
             cmd_static(kb, args)
         elif args.command == "set-key":
             cmd_set_key(kb, args)
+        elif args.command == "set-led":
+            cmd_set_led(kb, args)
+        elif args.command == "keys":
+            cmd_keys(kb, args)
         elif args.command == "off":
             cmd_off(kb, args)
         elif args.command == "profile":

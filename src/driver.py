@@ -24,18 +24,24 @@ The lighting MCU on interface 3 speaks 64-byte reports with a four-byte header:
 The colour pages this driver already sent fit that layout exactly: the two bytes zeroed at the
 head of each 62-byte chunk are BLength, and the firmware wants them zero on a colour page.
 See docs/PROTOCOL.md for the full command table and where it came from.
+
+The colour map itself is addressed by **LED position**, not by buffer offset and not by key.
+Three pages of 60 positions are transmitted per channel; on this keyboard the first 176 of them
+reach an LED and the last four are padding.  A key owns as many positions as it has LEDs - two
+for a dual-legend key, five for Space, six for backspace - and ``data/keys.json`` holds that
+grouping.  ``_offset`` is the only place the 62-byte chunking is allowed to matter.
 """
 
-import json
-import os
 import hid
 
 try:
     # Package import: `from src import OmenKeyboard`
     from . import effects as fx
+    from . import layouts as kbl
 except ImportError:
     # Flat import: scripts/ append src/ to sys.path and do `from driver import ...`
     import effects as fx
+    import layouts as kbl
 
 
 class OmenKeyboard:
@@ -45,18 +51,35 @@ class OmenKeyboard:
     Two independent lighting mechanisms live behind this one interface:
 
     * **Per-key colour** - commands 0x05/0x06/0x07 paint a static picture the host owns.
-      ``set_key_color`` / ``set_all`` / ``apply``.
+      ``set_key_color`` / ``set_led_color`` / ``set_all`` / ``apply``.
     * **The effect engine** - command 0x03 hands one 36-byte record to the MCU, which then
       renders one of twelve animations itself, with no host process running.  ``set_effect``.
 
     Prefer the effect engine for anything animated: a host-drawn animation is 9 reports per
     frame and the MCU renders the same thing from a single report.
+
+    Both of these are the MCU's own state, which is why a picture written here survives the Fn
+    overlay with nothing running on the host - see docs/PROTOCOL.md, "Fn, and which interface
+    owns the picture".
     """
 
     VID = 0x0d62
     PID = 0x54bf
 
     REPORT_LENGTH = 64
+
+    # One page is 62 buffer bytes: two of BLength and 60 of colour map.  Three pages per
+    # channel, so 186 buffer bytes carrying 180 transmitted LED positions.
+    PAGES = 3
+    PAGE_BYTES = 62
+    PAYLOAD_BYTES = 60
+    CHANNEL_BYTES = PAGES * PAGE_BYTES              # 186
+    TRANSMITTED_POSITIONS = PAGES * PAYLOAD_BYTES   # 180
+
+    #: Positions that reach an LED when the layout is unknown.  HP's pre-26C1 table declares 180
+    #: entries and annotates the last four as padding, and the wire capture agrees: OGH's third
+    #: page carries 56 colour bytes and four zeros.
+    DEFAULT_LIVE_POSITIONS = 176
 
     # Commands.  Names are HP's, from McuSDK2 General.GeneralCommandHelper.
     CMD_SET_EFFECT = 0x03
@@ -82,35 +105,82 @@ class OmenKeyboard:
     ACK = bytes((0xec, 0xac))
     NAK = bytes((0xec, 0xfa))
 
-    def __init__(self, key_map_path=None):
+    def __init__(self, key_map_path=None, layout=None):
+        """
+        ``layout`` forces a keyboard from ``data/keyboards.json`` (e.g. ``"Starmade/German"``)
+        instead of detecting one from the DMI board name.  Pass it for a board the catalogue
+        does not know, or gets wrong.
+        """
         target_path = None
         for d in hid.enumerate(self.VID, self.PID):
             if d.get('interface_number') == 3:
                 target_path = d['path']
                 break
-        
+
         if not target_path:
             raise RuntimeError("Omen Keyboard Lighting Interface not found.")
-            
+
         self.device = hid.Device(path=target_path)
         # Buffer for each color channel (3 chunks of 62 bytes = 186 bytes)
         self.channels = {
-            0x05: bytearray(186), # Red
-            0x06: bytearray(186), # Green
-            0x07: bytearray(186)  # Blue
+            0x05: bytearray(self.CHANNEL_BYTES), # Red
+            0x06: bytearray(self.CHANNEL_BYTES), # Green
+            0x07: bytearray(self.CHANNEL_BYTES)  # Blue
         }
-        
-        if not key_map_path:
-            # Traversal: src/driver.py -> src -> [ROOT]
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            key_map_path = os.path.join(base_dir, 'data', 'keys.json')
-            
+
+        self._load_layout(key_map_path, layout)
+
+    def _load_layout(self, key_map_path=None, layout=None):
+        """
+        Work out which keyboard this is, and so which LED bytes make up each key.
+
+        An unknown board falls back to the one verified layout rather than refusing to run, but
+        it says so: the wrong layout lights the wrong keys and looks like a working feature.
+        ``self.layout_warning`` carries the message for a UI to show, or None.
+        """
+        self.board = kbl.board_id()
+        self.layout_warning = None
+
         try:
-            with open(key_map_path, 'r') as f:
-                self.key_map = json.load(f)
+            self.catalog = kbl.Catalog()
+            self.names = kbl.KeyNames(key_map_path) if key_map_path else kbl.KeyNames()
         except Exception as e:
-            print(f"Warning: Could not load key map: {e}")
+            print(f"Warning: Could not load keyboard layouts: {e}")
+            self.catalog, self.names = None, None
+            self.layout, self.key_map = None, {}
+            self.live_positions = self.DEFAULT_LIVE_POSITIONS
+            return
+
+        if layout:
+            self.layout = self.catalog.by_id(layout)
+            if self.layout is None:
+                raise ValueError(f"No layout '{layout}' in data/keyboards.json.")
+            if not self.layout.verified:
+                self.layout_warning = kbl.describe(self.layout, self.board)
+        else:
+            self.layout = self.catalog.for_board(self.board)
+            if self.layout is None:
+                self.layout = self.catalog.by_id(self.names.layout_id)
+                self.layout_warning = kbl.describe(None, self.board)
+            elif not self.layout.verified:
+                self.layout_warning = kbl.describe(self.layout, self.board)
+
+        self.live_positions = self.layout.leds if self.layout else self.DEFAULT_LIVE_POSITIONS
+
+        if self.layout is None:
+            print(f"Warning: data/keys.json names layout '{self.names.layout_id}', which is not "
+                  f"in data/keyboards.json.")
             self.key_map = {}
+        elif self.layout.id == self.names.layout_id:
+            #: group -> key name -> {"hp", "leds"}, in colour-map order.  The friendly names and
+            #: the display grouping the GUI draws its rows from.
+            self.key_map = self.names.rows
+        else:
+            # A keyboard this project has no friendly names for.  Keys are HP's names, in
+            # colour-map order, in one group - enough to address them, not enough to draw them.
+            self.key_map = {'keys': {
+                k.name: {'hp': k.name, 'leds': k.leds}
+                for k in sorted(self.layout.keys, key=lambda k: k.leds[0])}}
 
     # ----------------------------------------------------------------------------------
     # Framing
@@ -161,38 +231,76 @@ class OmenKeyboard:
     # Per-key colour
     # ----------------------------------------------------------------------------------
 
-    def _set_zone(self, channel_id, zone_idx, value):
-        if 0 <= zone_idx < 186:
-            self.channels[channel_id][zone_idx] = value & 0xFF
+    @classmethod
+    def _offset(cls, position):
+        """
+        Buffer offset of an LED position.
+
+        Two bytes of BLength sit at the head of every 62-byte page, so the map is not
+        contiguous in the buffer: position 60 is at offset 64, not 62.  Go through this rather
+        than adding to an offset - backspace spans positions 58 to 63, and walking those as
+        buffer offsets puts a colour byte where the firmware requires a zero.
+        """
+        if not 0 <= position < cls.TRANSMITTED_POSITIONS:
+            return None
+        page, within = divmod(position, cls.PAYLOAD_BYTES)
+        return page * cls.PAGE_BYTES + 2 + within
+
+    def set_led_color(self, position, r, g, b):
+        """
+        Colour ONE LED, addressed by colour-map position rather than by key.
+
+        A key is not one LED.  Dual-legend keys have two, Space five, backspace six, and the map
+        is per-LED natively - so the legends of one key can take different colours, which is
+        what the keyboard itself does for the Fn overlay.  ``key_leds`` gives the positions of a
+        key, in the order HP's table declares them.
+
+        Which LED is which ON the key is not in the data.  See ``layouts.Key``.
+        """
+        offset = self._offset(position)
+        if offset is None:
+            return False
+        self.channels[0x05][offset] = r & 0xFF
+        self.channels[0x06][offset] = g & 0xFF
+        self.channels[0x07][offset] = b & 0xFF
+        return True
+
+    def key_leds(self, key_name):
+        """The colour-map positions of a key, by friendly name or HP's.  None if unknown."""
+        for category in self.key_map.values():
+            if key_name in category:
+                return category[key_name]['leds']
+        if self.names and self.layout:
+            hp = self.names.hp_name(key_name, self.layout)
+            if hp:
+                return self.layout.key(hp).leds
+        return None
+
+    def keys(self):
+        """Every key name this keyboard answers to, in colour-map order."""
+        return [name for category in self.key_map.values() for name in category]
 
     def set_key_color(self, key_name, r, g, b):
-        mapping = None
-        for category in self.key_map.values():
-            if key_name in category: mapping = category[key_name]; break
-        
-        if not mapping: return False
-            
-        offset = mapping["offset"]
-        width = mapping.get("width", 1)
-        for i in range(width):
-            self._set_zone(0x05, offset + i, r)
-            self._set_zone(0x06, offset + i, g)
-            self._set_zone(0x07, offset + i, b)
-
-        # Link P key to P icon automatically
-        if key_name == "p":
-            self.set_key_color("p_icon", r, g, b)
-            
+        """Colour every LED of a key.  False when this keyboard has no such key."""
+        leds = self.key_leds(key_name)
+        if not leds:
+            return False
+        for position in leds:
+            self.set_led_color(position, r, g, b)
         return True
 
     def set_all(self, r, g, b):
-        for ch_id in [0x05, 0x06, 0x07]:
-            val = [r, g, b][[0x05, 0x06, 0x07].index(ch_id)]
-            self.channels[ch_id] = bytearray([val] * 186)
-            # Hardware alignment bytes
-            for chunk_idx in range(3):
-                self.channels[ch_id][chunk_idx * 62] = 0
-                self.channels[ch_id][chunk_idx * 62 + 1] = 0
+        """
+        Fill every live position.
+
+        Only the live ones.  Three full pages go on the wire either way, but the last four
+        positions are padding on this board, so HP's third page is 56 colour bytes and four
+        zeros - which is what the capture shows and what this reproduces.
+        """
+        for channel_id, value in ((0x05, r), (0x06, g), (0x07, b)):
+            self.channels[channel_id] = bytearray(self.CHANNEL_BYTES)
+            for position in range(self.live_positions):
+                self.channels[channel_id][self._offset(position)] = value & 0xFF
 
     def apply(self, persist=True):
         """
@@ -209,11 +317,11 @@ class OmenKeyboard:
         reports = []
         for channel_id in [0x05, 0x06, 0x07]:
             data = self.channels[channel_id]
-            for chunk_idx in range(3):
-                report = bytearray(64)
+            for chunk_idx in range(self.PAGES):
+                report = bytearray(self.REPORT_LENGTH)
                 report[0] = channel_id
                 report[1] = chunk_idx
-                chunk_data = data[chunk_idx * 62 : (chunk_idx + 1) * 62]
+                chunk_data = data[chunk_idx * self.PAGE_BYTES:(chunk_idx + 1) * self.PAGE_BYTES]
                 report[2:64] = chunk_data
                 reports.append(report)
         
@@ -344,24 +452,83 @@ class OmenKeyboard:
         """
         Returns a dict mapping key_name -> (R, G, B) based on current driver buffer state.
 
+        The colour of a key's FIRST LED.  A key with two legends can hold two colours and this
+        reports one of them; ``get_led_colors`` is the whole picture.
+
         Per-key colour has no readback: the MCU answers colour pages with an acknowledgement
         and offers no command that returns the key map, so this reflects what the driver last
         buffered rather than what the hardware holds.  The interface as a whole is not
         write-only, though - see ``get_effect`` (0x83) and ``get_device_info`` (0x80), both of
         which return real state.
         """
-        key_colors = {}
-        r_buf = self.channels.get(0x05, bytearray(186))
-        g_buf = self.channels.get(0x06, bytearray(186))
-        b_buf = self.channels.get(0x07, bytearray(186))
+        colors = self.get_led_colors()
+        return {name: colors[info['leds'][0]]
+                for row in self.key_map.values()
+                for name, info in row.items()
+                if info['leds'] and info['leds'][0] < len(colors)}
 
-        for row in self.key_map.values():
-            for key_name, info in row.items():
-                offset = info.get("offset", 0)
-                if 0 <= offset < 186:
-                    key_colors[key_name] = (r_buf[offset], g_buf[offset], b_buf[offset])
-
-        return key_colors
+    def get_led_colors(self):
+        """The buffered colour of every live position, indexed by colour-map position."""
+        return [(self.channels[0x05][self._offset(p)],
+                 self.channels[0x06][self._offset(p)],
+                 self.channels[0x07][self._offset(p)])
+                for p in range(self.live_positions)]
 
     def close(self):
         self.device.close()
+
+
+# --------------------------------------------------------------------------------------
+# The other interface, and the one way it can make this one look broken
+# --------------------------------------------------------------------------------------
+
+#: HID LampArray control report.  Report id 6 is the LampArrayControlReport in the HID Lighting
+#: and Illumination spec's own ordering, and it carries one field: AutonomousMode.
+LAMP_CONTROL_REPORT_ID = 6
+
+#: mi_04, the keyboard's HID LampArray (usage page 0x59).  A second, coarser enumeration of the
+#: same LEDs - 120 lamps against this map's 176 positions - and a different way to drive them.
+LAMPARRAY_INTERFACE = 4
+
+
+def restore_device_lighting_control(vid=OmenKeyboard.VID, pid=OmenKeyboard.PID):
+    """
+    Tell the keyboard to go back to drawing its own lighting: ``AutonomousMode = 1``.
+
+    Run this if the keyboard is dark, every command is acknowledged, and nothing lights.
+
+    The other interface on this device, mi_04, is a HID LampArray.  A host that writes
+    ``AutonomousMode = 0`` to its control report takes ownership of the LEDs, and the MCU stops
+    drawing - including the static colour map this driver writes.  Everything then acknowledges
+    honestly and displays nothing, for HP's own client as much as for this one.
+
+    Three things make that worth a recovery command rather than a footnote:
+
+    * **Nothing sets it back.**  It is device state, not process state; it outlives the program
+      that set it and survives a reboot, because the internal USB bus stays powered.
+    * **It is not readable.**  Report 6 is write-only on this device, so the state is invisible
+      to software and the only symptom is a keyboard that ignores you.
+    * **It travels across a dual boot.**  Windows Dynamic Lighting and some OMEN control apps
+      take host control and do not hand it back, so the wedge can arrive from the other OS.
+
+    Returns the number of interfaces the report was accepted by.  As everywhere else here, an
+    accepted write is not a lit keyboard: look at it.
+    """
+    written = 0
+    for entry in hid.enumerate(vid, pid):
+        if entry.get('interface_number') not in (LAMPARRAY_INTERFACE, -1):
+            continue
+        if entry.get('usage_page') not in (0x59, 0, None):
+            continue
+        try:
+            device = hid.Device(path=entry['path'])
+        except Exception:
+            continue
+        try:
+            device.send_feature_report(bytes((LAMP_CONTROL_REPORT_ID, 0x01)))
+            written += 1
+        except Exception:
+            pass
+        finally:
+            device.close()
+    return written
