@@ -6,11 +6,47 @@ import os
 import struct
 import re
 
+# The bar's nine device-side animations, selected by payload byte [1] of the same command that
+# sets a static colour.  5 is unassigned.  This numbering is the light bar's own - it is NOT the
+# keyboard MCU's, and Ghosting, Ripple and OMEN X do not exist here at all.  OGH's twelve-item
+# keyboard list and this nine-item list are two device paths merged in the UI, so always name the
+# device along with the number.  All nine were written to real hardware and looked at.
+LB_ANIMATIONS = {
+    "lighting-sync": 1,
+    "color-cycle": 2,
+    "starlight": 3,
+    "breathing": 4,
+    "wave": 6,
+    "raindrop": 7,
+    "audio-pulse": 8,
+    "confetti": 9,
+    "sun": 10,
+    "swipe": 11,
+}
+
+# Payload byte [2] packs three fields.
+LB_SPEEDS = {"slow": 0, "medium": 1, "fast": 2}
+LB_DIRECTIONS = {"left": 4, "right": 8}          # two directions, not the keyboard's six
+LB_THEMES = {"galaxy": 16, "volcano": 32, "jungle": 48, "ocean": 64, "custom": 80}
+
+# The firmware special-cases exactly two input values and stores something else.  #FF0000 comes
+# back as #FE0000, which is visually indistinguishable; #FFFFFF comes back as #FEA3DA, which is a
+# plainly purple-white next to a plainly white #FFFFFE.  Every other value tested passes through
+# byte-exact, including #FF0001 one bit away - so this is a two-entry lookup, not a gamma curve.
+# White is therefore the one colour a caller must not ask this device for.
+_WHITE_SUBSTITUTION = {(0xFF, 0xFF, 0xFF): (0xFF, 0xFF, 0xFE)}
+
+
 class OmenLightbar:
     """
     Controller for the HP OMEN Laptop bottom light strip (Dojo Lightbar) using ACPI calls on Linux.
     Requires the `acpi_call` kernel module (`/proc/acpi/call`) and root privileges.
+
+    Four zones, zone 0 leftmost, confirmed by writing red/green/blue/white and looking.
     """
+
+    #: Rewrite #FFFFFF to #FFFFFE so "white" is white.  Set False to send values verbatim.
+    AVOID_FIRMWARE_WHITE = True
     def __init__(self, acpi_path=None):
         self.acpi_path = acpi_path or self._detect_acpi_path()
 
@@ -109,7 +145,7 @@ class OmenLightbar:
             return False
 
 
-    def _build_payload(self, colors, brightness=100):
+    def _build_payload(self, colors, brightness=100, effect=0, config=0, tribe=0, bass=0):
         # Ensure 4 zones
         colors = list(colors)
         if len(colors) > 4:
@@ -117,14 +153,21 @@ class OmenLightbar:
         while len(colors) < 4:
             colors.append((0, 0, 0))
 
+        if self.AVOID_FIRMWARE_WHITE:
+            colors = [_WHITE_SUBSTITUTION.get(tuple(c), c) for c in colors]
+
         # 128-byte payload layout
         data = bytearray(128)
-        data[0] = 0    # Target device: LightBar
-        data[1] = 0    # Mode: Static
-        data[2] = 0    # Config: Static
+        data[0] = 0    # Target device: 0 LightBar, 1 FourZoneAni (the 4-zone keyboard variant)
+        data[1] = effect & 0xFF   # 0 = static colour; non-zero selects one of LB_ANIMATIONS
+        data[2] = config & 0xFF   # speed | direction | theme, packed - see _pack_config
         data[3] = max(0, min(100, brightness))
-        data[4] = 0    # tribe
-        data[5] = 0    # bass
+        # tribe/bass are the audio-pulse band levels, and they ARE the animation rather than an
+        # enable for it: held constant the bar shows a steady colour and keeps showing it after
+        # the process exits.  At 0/0 Audio Pulse renders black.  HP varies them per audio sample
+        # from its own thread.
+        data[4] = max(0, min(255, tribe))
+        data[5] = max(0, min(255, bass))
         data[6] = len(colors)  # Zone count (4)
 
         # Write RGB values for zones
@@ -140,17 +183,7 @@ class OmenLightbar:
         full_buffer = header + data
         return f"b{full_buffer.hex()}"
 
-    def set_colors(self, colors, brightness=100):
-        """
-        Set color of the 4 lightbar zones.
-
-        Parameters:
-            colors (list of tuples): Up to 4 (R, G, B) tuples for zones 1 to 4.
-            brightness (int): Brightness level (0-100).
-        """
-        self.ensure_available(auto_load=True)
-
-        hex_arg = self._build_payload(colors, brightness)
+    def _write(self, hex_arg):
         acpi_cmd = f"{self.acpi_path} 0 3 {hex_arg}"
 
         try:
@@ -169,6 +202,71 @@ class OmenLightbar:
         except FileNotFoundError:
             raise RuntimeError("acpi_call module missing (/proc/acpi/call not found).")
 
+    def set_colors(self, colors, brightness=100):
+        """
+        Set color of the 4 lightbar zones.
+
+        Parameters:
+            colors (list of tuples): Up to 4 (R, G, B) tuples for zones 1 to 4.
+            brightness (int): Brightness level (0-100).
+
+        Brightness is byte [3] of the payload and rides along with the colour; there is no
+        separate brightness command on this path, and no way to read it back.
+        """
+        self.ensure_available(auto_load=True)
+        return self._write(self._build_payload(colors, brightness))
+
+    @staticmethod
+    def _pack_config(speed="medium", direction="left", theme="galaxy"):
+        """Pack payload byte [2]: bits 0-1 speed, bits 2-3 direction, bits 4-7 theme."""
+        def pick(table, value, what):
+            if isinstance(value, int):
+                return value
+            key = str(value).strip().lower()
+            if key not in table:
+                raise ValueError(f"Unknown {what} '{value}'. Choose one of: {', '.join(table)}")
+            return table[key]
+
+        return (pick(LB_SPEEDS, speed, "speed")
+                | pick(LB_DIRECTIONS, direction, "direction")
+                | pick(LB_THEMES, theme, "theme"))
+
+    def set_animation(self, effect, theme="galaxy", speed="medium", direction="left",
+                      colors=None, brightness=100, levels=(0, 0)):
+        """
+        Run one of the bar's nine device-side animations. See LB_ANIMATIONS for the names.
+
+        The animation runs in firmware with nothing maintaining it, so this is one call and
+        the process can exit.  Two of the nine need their arguments chosen with care, and both
+        render **black** otherwise:
+
+        * ``swipe`` has no preset palette - pass ``theme="custom"`` and two colours.
+        * ``audio-pulse`` is host-fed; ``levels`` are the band levels and at ``(0, 0)`` it
+          draws nothing.  Constant levels give a constant colour, not a pulse: to make it
+          react to audio you have to re-send this from your own audio thread.
+
+        There is no readback for animation state on this path - HP's own read command returns
+        FAIL on this board - so the only way to confirm an animation is to look at the bar.
+        """
+        self.ensure_available(auto_load=True)
+
+        if isinstance(effect, str):
+            key = effect.strip().lower()
+            if key not in LB_ANIMATIONS:
+                raise ValueError(
+                    f"Unknown animation '{effect}'. Choose one of: {', '.join(LB_ANIMATIONS)}")
+            effect = LB_ANIMATIONS[key]
+
+        tribe, bass = (list(levels) + [0, 0])[:2]
+        payload = self._build_payload(
+            colors or [(0, 0, 0)] * 4,
+            brightness=brightness,
+            effect=effect,
+            config=self._pack_config(speed, direction, theme),
+            tribe=tribe,
+            bass=bass,
+        )
+        return self._write(payload)
 
     def set_static(self, r, g, b, brightness=100):
         """Sets all 4 lightbar zones to the same RGB color."""

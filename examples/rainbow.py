@@ -1,6 +1,18 @@
+"""
+A host-rendered rainbow: nine reports per frame, redrawn forever.
+
+If all you want is a moving rainbow, the MCU renders one itself from a single report and
+keeps rendering it after this process exits - see examples/effects.py. Reach for this file
+when you need per-key control of the pattern, which the hardware effects do not give you.
+"""
+
+import os
+import sys
 import time
 import math
-from omen_keyboard import OmenKeyboard
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+from driver import OmenKeyboard
 
 def rainbow():
     kb = OmenKeyboard()
@@ -9,12 +21,13 @@ def rainbow():
     keys = {}
     for category in kb.key_map.values():
         keys.update(category)
-        
+
     if not keys:
         print("No keys found in key_map!")
         return
-        
-    sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["offset"])
+
+    # Colour-map order, which runs roughly left to right and top to bottom across the board.
+    sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["leds"][0])
     
     print(f"Starting Rainbow on {len(sorted_keys)} keys...")
     
@@ -42,7 +55,9 @@ def rainbow():
                 r, g, b = hsv_to_rgb(hue, 1.0, 1.0)
                 kb.set_key_color(name, int(r * 255), int(g * 255), int(b * 255))
             
-            kb.apply()
+            # persist=False: the frame still displays, but it does not write MCU flash.
+            # Persisting here would be a flash write every 20 ms.
+            kb.apply(persist=False)
             t += 0.05
             time.sleep(0.02)
     except KeyboardInterrupt:
