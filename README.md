@@ -1,73 +1,88 @@
 # Omen RGB Linux
 
-A high-fidelity, per-key lighting controller for the **HP Omen Max 16** keyboard (**HP Gaming Keyboard II**, USB ID **0d62:54bf**) on Linux.
+A high-fidelity lighting controller for **HP Omen 4-Zone RGB keyboards**, **HP Victus Single-Zone RGB keyboards**, a **per-key controller for the HP Omen Max 16** keyboard (**HP Gaming Keyboard II**, USB ID **0d62:54bf**), and the bottom lightbar on Linux.
 
 ## Features
-- **SDK**: Python library for custom lighting scripts.
+- **SDK**: Python library for custom lighting scripts (see [examples/](examples/)).
 - **CLI**: Control your keyboard from the terminal.
 - **GUI**: Control your keyboard with graphical interface.
 
+
+### Driver Prerequisites
+
+- RGB controlling functionality requires installing a custom `hp-wmi` driver via the [omen-fan-control](https://github.com/arfelious/omen-fan-control) project. That driver exposes multicolor LED support for 4-zone keyboards, single-zone keyboards, and the bottom lightbar when applicable. The driver also exposes keyboard type, which is used to determine whether the numpad should be shown in the GUI.
+
+
+---
+
 ## Installation & Usage
 
-### 1. Install Dependencies
-Requires `hidapi` for USB keyboard communication. Controlling the optional bottom lightbar requires the `acpi_call` kernel module.
-
+### Option A: uv (Recommended)
+Install `omen-rgb` and `omen-rgb-gui` globally in an isolated environment via uv:
 ```bash
-# Python dependency
-pip install hidapi
-
-# System dependency (Optional for per-key RGB keyboards if you don't want to change the lightbar, necessary for 4-zone keyboards)
-sudo pacman -S acpi_call-dkms      # Arch Linux
-sudo apt install acpi_call-dkms    # Ubuntu / Debian
-sudo dnf install akmod-acpi_call   # Fedora
+uv tool install git+https://github.com/arfelious/omen-rgb-linux.git
+sudo ln -sf "$HOME/.local/bin/omen-rgb"* /usr/local/bin/
 ```
 
-### 2. Quick Start (Local Run)
-You can run the controller directly from the repository without installing it globally.
+### Option B: pipx
 ```bash
-# Set a static color
-sudo python3 scripts/omen_cli.py static 0 255 0
-
-# Open the GUI
-sudo python3 scripts/omen_gui.py
+pipx install git+https://github.com/arfelious/omen-rgb-linux.git
+sudo ln -sf "$HOME/.local/bin/omen-rgb"* /usr/local/bin/
 ```
+> **Note:** Because device hardware access requires root permissions, symlinking the binaries to `/usr/local/bin` ensures `sudo` can locate `omen-rgb` and `omen-rgb-gui`.
 
-### 3. System-wide Installation (Optional)
-To use the `omen_cli` command from any directory, install the package:
+### Option C: Clone and run from source
 ```bash
-pip install .
-sudo omen_cli static 255 0 255
+git clone https://github.com/arfelious/omen-rgb-linux.git
+cd omen-rgb-linux
+
+# Run with uv:
+uv sync
+sudo uv run omen-rgb status
+sudo uv run omen-rgb-gui
 ```
 
 ## CLI Reference
-If running locally, use `python3 scripts/omen_cli.py`. If installed, use `omen_cli`.
+After installation, use `omen-rgb` to use the CLI. If running locally from source, you can also use `python3 scripts/omen_cli.py`.
+
 ```bash
-# Control all devices (keyboard + lightbar if supported, only keyboard if not supported)
-sudo python3 scripts/omen_cli.py all static '#ff9900'
-sudo python3 scripts/omen_cli.py all profile my_preset
-sudo python3 scripts/omen_cli.py all off
-sudo python3 scripts/omen_cli.py all rainbow
+# Check device status & active zones
+sudo omen-rgb status
+
+# Control all devices (keyboard + lightbar if supported)
+sudo omen-rgb all static '#ff9900'
+sudo omen-rgb all profile my_preset
+sudo omen-rgb all off
+sudo omen-rgb all rainbow
 
 # Apply or list saved profiles
-sudo python3 scripts/omen_cli.py list
-sudo python3 scripts/omen_cli.py profile my_preset
+sudo omen-rgb list
+sudo omen-rgb profile my_preset
 
 # Keyboard-only commands
-sudo python3 scripts/omen_cli.py static '#ff9900'
-sudo python3 scripts/omen_cli.py static 255 0 255
-sudo python3 scripts/omen_cli.py set-key esc '#ff0000'
-sudo python3 scripts/omen_cli.py rainbow
-sudo python3 scripts/omen_cli.py off
+sudo omen-rgb static '#ff9900'
+sudo omen-rgb static 255 0 255
+sudo omen-rgb set-key esc '#ff0000'
+sudo omen-rgb rainbow
+sudo omen-rgb off
+
+# 4-Zone Keyboard commands
+# Possible zone names are wasd, left, center, and right 
+sudo omen-rgb zone wasd '#ff0000'
+sudo omen-rgb zones '#0099ff' '#7a00ff' '#ff3300' '#ffb700'
 
 # Control Bottom Lightbar (supports hex codes or RGB integer components)
-sudo python3 scripts/omen_cli.py lightbar static '#ff9900'
-sudo python3 scripts/omen_cli.py lightbar zones '#ff9900' '#00ff00' '#0000ff' '#ffff00'
-sudo python3 scripts/omen_cli.py lightbar zones 255 0 0 0 255 0 0 0 255 255 255 0
-sudo python3 scripts/omen_cli.py lightbar off
+sudo omen-rgb lightbar static '#ff9900'
+sudo omen-rgb lightbar zones '#ff9900' '#00ff00' '#0000ff' '#ffff00'
+sudo omen-rgb lightbar off
 ```
 
 ### GUI
+Launch the graphical interface:
+After installation, yobu can use `sudo omen-rgb-gui` to launch the graphical interface. You can use `sudo python3 scripts/omen_gui.py` if you haven't done the installation process.
 ```bash
+sudo omen-rgb-gui
+# Or locally from source: 
 sudo python3 scripts/omen_gui.py
 ```
 
@@ -75,138 +90,34 @@ sudo python3 scripts/omen_gui.py
 |---|
 
 
-## SDK Documentation
 
-The project includes a Python SDK (`OmenKeyboard`) to control keyboard lighting programmatically.
+## Uninstallation
 
-### Import & Initialization
+### Option A: uv
+```bash
+sudo rm -rf ~/.local/share/uv/tools/omen-rgb ~/.local/bin/omen-rgb* /usr/local/bin/omen-rgb*
+```
+> **Note:** Regular `uv tool uninstall omen-rgb` may fail with permission errors if cache or `.pyc` files were created with `sudo`. The command above cleanly removes the tool and symlinks.
 
-If you are running scripts from the root directory or installing it locally, import the driver class:
-```python
-from src import OmenKeyboard
+### Option B: pipx
+```bash
+pipx uninstall omen-rgb
+sudo rm -f /usr/local/bin/omen-rgb*
 ```
 
-#### Constructor: `OmenKeyboard(key_map_path=None)`
-Initializes the driver and connects to the keyboard.
-- **Parameters**:
-  - `key_map_path` (*str*, optional): Custom path to the `keys.json` file. If not provided, it defaults to `data/keys.json` relative to the package root.
-- **Raises**:
-  - `RuntimeError`: If the HP Gaming Keyboard II lighting interface cannot be found.
-
-> Writing to raw USB devices requires root permissions by default on most Linux systems. Run your SDK scripts using `sudo python3 script.py` or configure appropriate `udev` rules.
-
-### API Methods
-
-#### `set_key_color(key_name, r, g, b)`
-Set the RGB color of a specific key in the buffer.
-- **Parameters**:
-  - `key_name` (*str*): The identifier of the key to modify (e.g., `"esc"`, `"space"`, `"a"`, `"num_0"`). See [Key Mapping Reference](#key-mapping-reference) for details.
-  - `r` (*int*): Red channel value (0–255).
-  - `g` (*int*): Green channel value (0–255).
-  - `b` (*int*): Blue channel value (0–255).
-- **Returns**: `bool` – `True` if the key exists and the color was set; `False` otherwise.
-- **Notes**: Setting the color of the `"p"` key automatically applies the same color to the `"p_icon"` special logo key.
-
-#### `set_all(r, g, b)`
-Set the color of all keys across the entire keyboard to a static color.
-- **Parameters**:
-  - `r` (*int*), `g` (*int*), `b` (*int*): RGB channel values (0–255).
-
-#### `apply()`
-Commits and writes the buffered colors to the keyboard hardware. This performs the multi-channel transfer and commits the changes using the commit protocol.
-
-#### `close()`
-Closes the underlying HID device connection. It's recommended to call this to cleanly release system resources.
-
-### Complete Example
-
-Here is a complete script demonstrating initialization, custom layout configuration, error handling, and proper resource cleanup:
-
-```python
-import sys
-import time
-from src import OmenKeyboard
-
-try:
-    # Initialize the keyboard interface
-    kb = OmenKeyboard()
-    
-    # 1. Clear all previous lights
-    kb.set_all(0, 0, 0)
-    kb.apply()
-    time.sleep(0.2)
-
-    # 2. Highlight WASD cluster in Red
-    for key in ["w", "a", "s", "d"]:
-        kb.set_key_color(key, 255, 0, 0)
-        
-    # 3. Highlight ESC key in Green
-    kb.set_key_color("esc", 0, 255, 0)
-    
-    # 4. Highlight Spacebar in Blue
-    kb.set_key_color("space", 0, 0, 255)
-
-    # Write changes to keyboard hardware
-    kb.apply()
-
-    print("RGB lighting applied successfully.")
-    
-except RuntimeError as e:
-    print(f"Driver Error: {e}", file=sys.stderr)
-    print("Ensure the keyboard is connected and you have write permissions (run with sudo).", file=sys.stderr)
-    sys.exit(1)
-finally:
-    # Ensure connections are cleanly closed
-    if 'kb' in locals():
-        kb.close()
+### Clean configuration and profiles (Optional):
+```bash
+rm -rf ~/.config/omen-rgb-linux
 ```
 
-### OmenLightbar (Bottom Light Strip SDK)
+## Device Support
 
-Control the 4-zone bottom lightbar on HP OMEN laptops using Linux ACPI calls (`/proc/acpi/call`).
+This software supports:
+- **Per-Key RGB Keyboards**: HP Gaming Keyboard II (USB ID `0d62:54bf`) via raw USB HID protocol (standalone, no extra drivers required).
+- **4-Zone RGB Keyboards**: Linux Multicolor LED class nodes (`/sys/class/leds/hp::kbd_zoned_backlight-*`) exposed by the `hp-wmi` kernel driver (requires [omen-fan-control](https://github.com/arfelious/omen-fan-control)).
+- **Single-Zone RGB Keyboards**: Single-zone HP/Victus backlight node (`/sys/class/leds/hp::kbd_backlight`) exposed by the `hp-wmi` kernel driver (requires [omen-fan-control](https://github.com/arfelious/omen-fan-control)).
 
-```python
-from src import OmenLightbar
-
-lb = OmenLightbar()
-
-# 1. Set static color on all 4 zones
-lb.set_static(255, 0, 0, brightness=100)
-
-# 2. Set distinct colors for individual zones (Zones 1-4)
-lb.set_colors([
-    (255, 0, 0),    # Zone 1: Red
-    (0, 255, 0),    # Zone 2: Green
-    (0, 0, 255),    # Zone 3: Blue
-    (255, 255, 0)   # Zone 4: Yellow
-], brightness=100)
-
-# 3. Query current active hardware zone colors and brightness from ACPI BIOS
-result = lb.get_colors()
-if result:
-    colors, brightness = result
-    print(f"Current lightbar colors: {colors}, brightness: {brightness}")
-
-# 4. Turn off lightbar
-lb.turn_off()
-```
-
-
-
-### Key Mapping Reference
-
-Key names are mapped to hardware offsets in `data/keys.json`. Available keys are organized in the following categories:
-
-- **Row 0–5**: Standard keyboard rows (e.g. `"esc"`, `"f1"`, `"tilde"`, `"1"`, `"tab"`, `"q"`, `"caps_lock"`, `"a"`, `"l_shift"`, `"z"`, `"l_ctrl"`, `"space"` etc.)
-- **Navigation**: `"left"`, `"up"`, `"down"`, `"right"`
-- **Numpad**: `"num_lock"`, `"num_0"` through `"num_9"`, `"num_plus"`, `"num_enter"`, etc.
-- **Special keys**: `"omen"`, `"calculator"`, `"settings"`, `"power"`, `"p_icon"` (The icon beneath the P key)
-
-## Device Support & Contributions
-
-Currently, this program specifically targets the **HP Gaming Keyboard II (0d62:54bf)** with **per-key** RGB lighting. 
-
-Support for **4-zone Omen/Victus/Omen Max keyboards** may be added in the future if a tester with the physical device is found to verify drivers. If you own a 4-zone Omen keyboard and are willing to help test, please contact **arfelious@proton.me**.
+- **Bottom Lightbar**: 4-zone addressable lightbar on HP OMEN MAX laptops (requires [omen-fan-control](https://github.com/arfelious/omen-fan-control)).
 
 ## Disclaimer
 

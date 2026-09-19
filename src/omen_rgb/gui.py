@@ -17,9 +17,50 @@ import glob
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(BASE_DIR, 'src'))
 
-from driver import OmenKeyboard
-from lightbar import OmenLightbar
+try:
+    from omen_rgb.driver import OmenKeyboard
+    from omen_rgb.lightbar import OmenLightbar
+except ImportError:
+    from driver import OmenKeyboard
+    from lightbar import OmenLightbar
 
+# Variable flags for simulating control without writing to hardware or filesystem
+# Set to True, export OMEN_SIMULATE_4ZONE=1 / OMEN_SIMULATE_1ZONE=1, or run with -s / -s1
+SIMULATE_4ZONE = os.environ.get("OMEN_SIMULATE_4ZONE", "0").lower() in ("1", "true", "yes")
+SIMULATE_1ZONE = os.environ.get("OMEN_SIMULATE_1ZONE", "0").lower() in ("1", "true", "yes")
+
+
+def _resolve_asset_path(filename):
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    pkg_path = os.path.join(pkg_dir, "assets", filename)
+    if os.path.exists(pkg_path):
+        return pkg_path
+    repo_path = os.path.join(os.path.dirname(os.path.dirname(pkg_dir)), "assets", filename)
+    if os.path.exists(repo_path):
+        return repo_path
+    return pkg_path
+
+
+def _get_profiles_dir():
+    config_dir = os.path.expanduser("~/.config/omen-rgb-linux/profiles")
+    if os.path.exists(config_dir):
+        return config_dir
+    repo_p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiles")
+    if os.path.exists(repo_p):
+        return repo_p
+    os.makedirs(config_dir, exist_ok=True)
+    return config_dir
+
+
+def _resolve_license_path():
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    p = os.path.join(pkg_dir, "LICENSE")
+    if os.path.exists(p):
+        return p
+    repo_p = os.path.join(os.path.dirname(os.path.dirname(pkg_dir)), "LICENSE")
+    if os.path.exists(repo_p):
+        return repo_p
+    return p
 
 class ModernDialog(tk.Toplevel):
     def __init__(self, parent, title, message, type="info", scroll_content=None):
@@ -121,9 +162,7 @@ class ProfileDialog(tk.Toplevel):
         y = parent.winfo_rooty() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
         self.geometry(f"+{x}+{y}")
 
-        self.p_dir = os.path.join(BASE_DIR, "profiles")
-        if not os.path.exists(self.p_dir):
-            os.makedirs(self.p_dir)
+        self.p_dir = _get_profiles_dir()
 
         tk.Label(self, text="PROFILE MANAGER", font=("Outfit", 16, "bold"), bg="#1a1a1a", fg="#00FFFF", pady=20).pack()
 
@@ -212,20 +251,43 @@ class RainbowThread(threading.Thread):
     def run(self):
         while self.running:
             self.hue = (self.hue + 0.003) % 1.0
-            r, g, b = [int(x * 255) for x in colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)]
-            self.kb.set_all(r, g, b)
-            self.kb.apply()
-            if self.gui.lb and self.gui.lb.is_available():
+            if self.gui.kb.is_4zone:
+                # 4-zone wave: Left (0.0) -> WASD (0.15) -> Center (0.35) -> Right (0.6)
+                zone_offsets = {"left": 0.0, "wasd": 0.15, "center": 0.35, "right": 0.6}
+                with self.gui.state_lock:
+                    for zn, offset in zone_offsets.items():
+                        zhue = (self.hue + offset) % 1.0
+                        zr, zg, zb = [int(x * 255) for x in colorsys.hsv_to_rgb(zhue, 1.0, 1.0)]
+                        self.kb.set_zone(zn, zr, zg, zb)
+                        keys_in_z = self.gui.kb.zones_data.get("zones", {}).get(zn, {}).get("keys", [])
+                        for k in keys_in_z:
+                            self.gui.session_state[k] = (zr, zg, zb)
+                self.kb.apply()
+            else:
+                r, g, b = [int(x * 255) for x in colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)]
+                self.kb.set_all(r, g, b)
+                self.kb.apply()
+                with self.gui.state_lock:
+                    for key in self.gui.key_items.keys():
+                        if key not in self.gui.lightbar_keys:
+                            self.gui.session_state[key] = (r, g, b)
+                    self.gui.session_state["p_icon"] = (r, g, b)
+
+            if not getattr(self.gui.kb, "is_simulation", False) and self.gui.lb and self.gui.lb.is_available():
                 try:
-                    self.gui.lb.set_static(r, g, b)
+                    lb_colors = []
+                    for zi in range(4):
+                        lhue = (self.hue + (zi / 4.0)) % 1.0
+                        lr, lg, lb_c = [int(x * 255) for x in colorsys.hsv_to_rgb(lhue, 1.0, 1.0)]
+                        lb_colors.append((lr, lg, lb_c))
+                        self.gui.session_state[f"lb_zone_{zi+1}"] = (lr, lg, lb_c)
+                    self.gui.lb.set_colors(lb_colors)
                 except Exception:
                     pass
+
             with self.gui.state_lock:
-                for key in self.gui.key_items.keys():
-                    self.gui.session_state[key] = (r, g, b)
                 self.gui.rainbow_dirty = True
             time.sleep(0.016)
-
 
     def stop(self):
         self.running = False
@@ -300,12 +362,17 @@ class ModernColorPicker(tk.Toplevel):
         self.destroy()
 
 class OmenGUI:
-    def __init__(self, root):
+    def __init__(self, root, simulate_4zone=None, simulate_1zone=None, has_numpad=None):
         self.root = root
         self.root.title("Omen RGB Control Center")
         self.root.geometry("1150x850")
         self.root.configure(bg="#1a1a1a")
         
+        if simulate_4zone is None:
+            simulate_4zone = SIMULATE_4ZONE or (os.environ.get("OMEN_SIMULATE_4ZONE", "0").lower() in ("1", "true", "yes"))
+        if simulate_1zone is None:
+            simulate_1zone = SIMULATE_1ZONE or (os.environ.get("OMEN_SIMULATE_1ZONE", "0").lower() in ("1", "true", "yes"))
+
         self.selected_keys = set()
         self.session_state = {} 
         self.key_items = {}
@@ -326,21 +393,28 @@ class OmenGUI:
         
         # Set Window Icon
         try:
-            icon_path = os.path.join(BASE_DIR, "assets", "logo.png")
+            icon_path = _resolve_asset_path("logo.png")
             self.icon_img = tk.PhotoImage(file=icon_path)
             self.root.iconphoto(True, self.icon_img)
         except Exception as e:
             print(f"Icon load fail: {e}")
             
         try:
-            self.kb = OmenKeyboard()
+            self.kb = OmenKeyboard(simulate_4zone=simulate_4zone, simulate_1zone=simulate_1zone, has_numpad=has_numpad)
         except Exception as e:
             print(f"Error: {e}")
             sys.exit(1)
+
+        self.has_numpad = self.kb.has_numpad
+
             
         try:
-            self.lb = OmenLightbar()
-            self.has_lightbar = self.lb.is_supported()
+            if self.kb.is_simulation:
+                self.lb = None
+                self.has_lightbar = False
+            else:
+                self.lb = OmenLightbar()
+                self.has_lightbar = self.lb.is_supported()
         except Exception as e:
             print(f"Lightbar notice: {e}")
             self.lb = None
@@ -358,6 +432,9 @@ class OmenGUI:
         self.root.bind("<KeyPress>", self.handle_keydown)
 
     def _save_active_state(self):
+        if getattr(self.kb, "is_simulation", False):
+            # Simulation mode: strictly in-memory UI testing, do not write to filesystem
+            return
         try:
             config_dir = os.path.expanduser("~/.config/omen-rgb-linux")
             os.makedirs(config_dir, exist_ok=True)
@@ -369,12 +446,16 @@ class OmenGUI:
             pass
 
     def _schedule_state_save(self):
+        if getattr(self.kb, "is_simulation", False):
+            return
         if getattr(self, "save_timer", None):
             self.save_timer.cancel()
         self.save_timer = threading.Timer(0.3, self._save_active_state)
         self.save_timer.start()
 
     def _load_active_state(self):
+        if getattr(self.kb, "is_simulation", False):
+            return False
         state_file = os.path.expanduser("~/.config/omen-rgb-linux/state.json")
         if os.path.exists(state_file):
             try:
@@ -390,7 +471,7 @@ class OmenGUI:
 
 
     def _init_session_state(self):
-        # 1. Attempt to query live lightbar colors directly from hardware ACPI BIOS
+        # 1. Attempt to query live lightbar colors directly from hardware
         lb_hardware_colors = None
         if self.has_lightbar and self.lb:
             try:
@@ -402,16 +483,36 @@ class OmenGUI:
             except Exception as e:
                 print(f"Lightbar hardware query notice: {e}")
 
-        # 2. Load saved state for keyboard lighting
+        # 2. Attempt to query live keyboard zone colors from sysfs (hp-wmi)
+        kb_hardware_colors = None
+        if self.kb.is_4zone:
+            try:
+                zk_colors = self.kb.get_zone_colors()
+                if zk_colors:
+                    kb_hardware_colors = zk_colors
+                    for zn, z_color in zk_colors.items():
+                        keys_in_z = self.kb.zones_data.get("zones", {}).get(zn, {}).get("keys", [])
+                        for k in keys_in_z:
+                            self.session_state[k] = z_color
+            except Exception as e:
+                print(f"Keyboard 4-zone hardware query notice: {e}")
+
+        # 3. Load saved state for keyboard lighting
         loaded = self._load_active_state()
 
-        # Prioritize live hardware lightbar colors over saved state.json file
+        # Prioritize live hardware colors over saved state.json file
         if lb_hardware_colors:
             for i, color in enumerate(lb_hardware_colors[:4], 1):
                 self.session_state[f"lb_zone_{i}"] = color
 
-        # 3. Fallback defaults if no saved state exists as keyboard color doesn't seem to be queriable
-        if not loaded:
+        if kb_hardware_colors:
+            for zn, z_color in kb_hardware_colors.items():
+                keys_in_z = self.kb.zones_data.get("zones", {}).get(zn, {}).get("keys", [])
+                for k in keys_in_z:
+                    self.session_state[k] = z_color
+
+        # 4. Fallback defaults if no saved state exists
+        if not loaded and not kb_hardware_colors:
             fallback_color = (255, 153, 0)  # #ff9900
             lb_first_zone = lb_hardware_colors[0] if (lb_hardware_colors and sum(lb_hardware_colors[0]) > 0) else None
             base_color = lb_first_zone if lb_first_zone else fallback_color
@@ -424,6 +525,9 @@ class OmenGUI:
                 for k_name in row.keys():
                     if k_name not in self.session_state:
                         self.session_state[k_name] = base_color
+
+        if "p" in self.session_state:
+            self.session_state["p_icon"] = self.session_state["p"]
 
         # Sync all keyboard key colors from session_state into self.kb driver buffer
         for k_name, color in self.session_state.items():
@@ -460,17 +564,47 @@ class OmenGUI:
         title_container.pack(side="left", expand=True, padx=(120, 0))
         
         try:
-            logo_path = os.path.join(BASE_DIR, "assets", "logo.png")
+            logo_path = _resolve_asset_path("logo.png")
             self.logo_img = tk.PhotoImage(file=logo_path).subsample(4, 4)
             tk.Label(title_container, image=self.logo_img, bg="#1a1a1a").pack(side="left", padx=10)
         except Exception as e:
             print(f"Logo fail: {e}")
 
-        tk.Label(title_container, text="OMEN RGB CONTROL CENTER", font=("Outfit", 26, "bold"), bg="#1a1a1a", fg="#ffffff", pady=5).pack(side="left")
+        title_lbl = tk.Label(title_container, text="OMEN RGB CONTROL CENTER", font=("Outfit", 26, "bold"), bg="#1a1a1a", fg="#ffffff", pady=5)
+        title_lbl.pack(side="left")
+
+        # Backend indicator badge
+        if getattr(self.kb, "simulate_4zone", False):
+            mode_text = "4-ZONE (SIMULATION)"
+            mode_color = "#FFD700"
+        elif getattr(self.kb, "simulate_1zone", False):
+            mode_text = "SINGLE-ZONE (SIMULATION)"
+            mode_color = "#39FF14"
+        elif self.kb.is_4zone:
+            mode_text = "4-ZONE (HP-WMI)"
+            mode_color = "#00FFFF"
+        elif self.kb.is_single_zone:
+            mode_text = "SINGLE-ZONE"
+            mode_color = "#39FF14"
+        else:
+            mode_text = "PER-KEY (HID)"
+            mode_color = "#FF9900"
+        tk.Label(title_container, text=f"[{mode_text}]", font=("Outfit", 10, "bold"), bg="#1a1a1a", fg=mode_color).pack(side="left", padx=10, pady=(8, 0))
         
         tk.Button(header_frame, text="LICENSE", bg="#222222", fg="#888888", font=("Outfit", 8), relief="flat", command=self.show_license).pack(side="right", padx=20, pady=(0, 20))
+        self._numpad_btn = tk.Button(
+            header_frame,
+            text=f"NUMPAD: {'ON' if self.has_numpad else 'OFF'}",
+            bg="#222222",
+            fg="#00FFFF" if self.has_numpad else "#888888",
+            font=("Outfit", 8, "bold"),
+            relief="flat",
+            command=self.toggle_numpad
+        )
+        self._numpad_btn.pack(side="right", padx=(0, 10), pady=(0, 20))
         
         self.canvas = tk.Canvas(self.root, width=1050, height=canvas_h, bg="#1a1a1a", highlightthickness=0)
+
 
         self.canvas.pack(pady=(20, 5))
         self.canvas.bind("<ButtonPress-1>", self.on_click)
@@ -478,6 +612,20 @@ class OmenGUI:
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         
         self.draw_keyboard_init()
+
+        # Quick Zone Selectors for 4-Zone Keyboards
+        if self.kb.is_4zone:
+            zone_sel_frame = tk.Frame(self.root, bg="#1a1a1a")
+            zone_sel_frame.pack(pady=(5, 2))
+            tk.Label(zone_sel_frame, text="SELECT ZONE:", font=("Outfit", 9, "bold"), bg="#1a1a1a", fg="#888888").pack(side="left", padx=(0, 10))
+            z_btn_style = {"font": ("Outfit", 9, "bold"), "bg": "#252525", "fg": "#DDDDDD", "relief": "flat", "padx": 10, "pady": 3}
+            tk.Button(zone_sel_frame, text="WASD", command=lambda: self.select_zone("wasd"), **z_btn_style).pack(side="left", padx=4)
+            tk.Button(zone_sel_frame, text="LEFT", command=lambda: self.select_zone("left"), **z_btn_style).pack(side="left", padx=4)
+            tk.Button(zone_sel_frame, text="CENTER", command=lambda: self.select_zone("center"), **z_btn_style).pack(side="left", padx=4)
+            tk.Button(zone_sel_frame, text="RIGHT", command=lambda: self.select_zone("right"), **z_btn_style).pack(side="left", padx=4)
+            tk.Button(zone_sel_frame, text="ALL KEYBOARD", command=lambda: self.select_zone("all"), **z_btn_style).pack(side="left", padx=4)
+            if self.has_lightbar:
+                tk.Button(zone_sel_frame, text="LIGHTBAR", command=lambda: self.select_zone("lightbar"), **z_btn_style).pack(side="left", padx=4)
         
         presets_frame = tk.Frame(self.root, bg="#1a1a1a")
         presets_frame.pack(pady=5)
@@ -519,13 +667,19 @@ class OmenGUI:
         self.update_rainbow_button_state()
 
     def _flush_hardware_writes(self, do_kb, do_lb):
+        if getattr(self.kb, "is_simulation", False):
+            # Simulation mode: strictly in-memory UI testing, do not write to hardware or filesystem
+            return
         with self.state_lock:
             if do_kb:
                 try:
-                    for k, color in self.session_state.items():
-                        if k not in self.lightbar_keys:
-                            self.kb.set_key_color(k, color[0], color[1], color[2])
-                    self.kb.apply()
+                    if self.kb.is_4zone or self.kb.is_single_zone:
+                        self.kb.apply()
+                    else:
+                        for k, color in self.session_state.items():
+                            if k not in self.lightbar_keys and k != "p_icon":
+                                self.kb.set_key_color(k, color[0], color[1], color[2])
+                        self.kb.apply()
                 except Exception as e:
                     print(f"Keyboard apply notice: {e}")
 
@@ -558,9 +712,28 @@ class OmenGUI:
 
             # 1. Update Keyboard state if targeted
             if kb_keys:
-                for k in kb_keys:
-                    self.kb.set_key_color(k, r, g, b)
-                    self.session_state[k] = (r, g, b)
+                if self.kb.is_4zone:
+                    affected_zones = set()
+                    for k in kb_keys:
+                        z = self.kb.key_to_zone.get(k)
+                        if z:
+                            affected_zones.add(z)
+                    for z in affected_zones:
+                        self.kb.set_zone(z, r, g, b)
+                        keys_in_z = self.kb.zones_data.get("zones", {}).get(z, {}).get("keys", [])
+                        for k in keys_in_z:
+                            self.session_state[k] = (r, g, b)
+                elif self.kb.is_single_zone:
+                    self.kb.set_zone("backlight", r, g, b)
+                    for k in self.key_items.keys():
+                        if k not in self.lightbar_keys:
+                            self.session_state[k] = (r, g, b)
+                else:
+                    for k in kb_keys:
+                        self.kb.set_key_color(k, r, g, b)
+                        self.session_state[k] = (r, g, b)
+                    if "p" in kb_keys:
+                        self.session_state["p_icon"] = (r, g, b)
 
             # 2. Update Lightbar state if targeted
             if lb_keys and self.has_lightbar:
@@ -573,18 +746,45 @@ class OmenGUI:
             self._schedule_state_save()
             self.update_key_visuals()
 
-
-
-
-
-
     def show_license(self):
         try:
-            lp = os.path.join(BASE_DIR, "LICENSE")
+            lp = _resolve_license_path()
             with open(lp, "r") as f:
                 ModernDialog(self.root, "GPL v3 LICENSE", "", "info", scroll_content=f.read())
         except:
             ModernDialog(self.root, "Error", "LICENSE not found!", "error")
+
+    def toggle_numpad(self):
+        self.has_numpad = not self.has_numpad
+        if hasattr(self, "_numpad_btn"):
+            self._numpad_btn.config(
+                text=f"NUMPAD: {'ON' if self.has_numpad else 'OFF'}",
+                fg="#00FFFF" if self.has_numpad else "#888888"
+            )
+        self.redraw_keyboard()
+
+    def redraw_keyboard(self):
+        self.canvas.delete("all")
+        self.key_items.clear()
+        self.selected_keys.clear()
+        self.draw_keyboard_init()
+
+    def select_zone(self, zone_name):
+        """Helper to select an entire zone in the GUI."""
+        if zone_name == "all":
+            self.selected_keys.clear()
+            self.update_key_visuals()
+            return
+
+        if zone_name == "lightbar":
+            self.selected_keys = set(self.lightbar_keys)
+            self.update_key_visuals()
+            return
+
+        if self.kb.is_4zone:
+            z_keys = self.kb.zones_data.get("zones", {}).get(zone_name, {}).get("keys", [])
+            self.selected_keys = set(z_keys)
+            self.update_key_visuals()
 
     def on_click(self, event):
         self.selection_start = (event.x, event.y)
@@ -598,11 +798,23 @@ class OmenGUI:
             self.selected_keys.clear()
             
         if key_name:
-            if is_ctrl and key_name in self.selected_keys:
-                self.selected_keys.remove(key_name)
-            else:
-                self.selected_keys.add(key_name)
+            if self.kb.is_4zone and key_name not in self.lightbar_keys:
+                z = self.kb.key_to_zone.get(key_name)
+                z_keys = self.kb.zones_data.get("zones", {}).get(z, {}).get("keys", [key_name])
+                if is_ctrl:
+                    if set(z_keys).issubset(self.selected_keys):
+                        self.selected_keys.difference_update(z_keys)
+                    else:
+                        self.selected_keys.update(z_keys)
+                else:
+                    self.selected_keys.update(z_keys)
                 self.current_focus = key_name
+            else:
+                if is_ctrl and key_name in self.selected_keys:
+                    self.selected_keys.remove(key_name)
+                else:
+                    self.selected_keys.add(key_name)
+                    self.current_focus = key_name
                 
         self.pre_drag_selection = set(self.selected_keys)
         with self.state_lock:
@@ -616,29 +828,33 @@ class OmenGUI:
         x1, y1 = event.x, event.y
         self.selected_keys = set(self.pre_drag_selection)
         
+        # Calculate bounding box
         for item in self.canvas.find_overlapping(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)):
             tag = next((t for t in self.canvas.gettags(item) if t not in ["key", "current"]), None)
             if tag:
-                self.selected_keys.add(tag)
+                if self.kb.is_4zone and tag not in self.lightbar_keys:
+                    z = self.kb.key_to_zone.get(tag)
+                    z_keys = self.kb.zones_data.get("zones", {}).get(z, {}).get("keys", [tag])
+                    self.selected_keys.update(z_keys)
+                else:
+                    self.selected_keys.add(tag)
                 
         with self.state_lock:
             self.update_key_visuals()
             
+        # Draw drag selection box
         if self.selection_rect:
             self.canvas.delete(self.selection_rect)
-        self.selection_rect = self.canvas.create_rectangle(x0, y0, x1, y1, outline="#00FFFF", dash=(4, 4))
+        self.selection_rect = self.canvas.create_rectangle(x0, y0, x1, y1, outline="#00FFFF", dash=(2, 2))
 
     def on_release(self, event):
+        self.selection_start = None
         if self.selection_rect:
             self.canvas.delete(self.selection_rect)
             self.selection_rect = None
-            
-        self.selection_start = None
-        with self.state_lock:
-            self.update_key_visuals()
 
     def handle_keydown(self, event):
-        if event.keysym in ["Up", "Down", "Left", "Right"]:
+        if not self.selected_keys and self.current_focus:
             all_k = list(self.key_items.keys())
             try:
                 idx = all_k.index(self.current_focus)
@@ -647,7 +863,12 @@ class OmenGUI:
                 elif event.keysym == "Left":
                     idx = (idx - 1) % len(all_k)
                 self.current_focus = all_k[idx]
-                self.selected_keys.add(self.current_focus)
+                if self.kb.is_4zone and self.current_focus not in self.lightbar_keys:
+                    z = self.kb.key_to_zone.get(self.current_focus)
+                    z_keys = self.kb.zones_data.get("zones", {}).get(z, {}).get("keys", [self.current_focus])
+                    self.selected_keys.update(z_keys)
+                else:
+                    self.selected_keys.add(self.current_focus)
             except:
                 pass
             with self.state_lock:
@@ -660,7 +881,7 @@ class OmenGUI:
 
     def save_profile(self, name):
         try:
-            p_dir = os.path.join(BASE_DIR, "profiles")
+            p_dir = _get_profiles_dir()
             with open(os.path.join(p_dir, f"{name}.json"), "w") as f:
                 json.dump(self.session_state, f)
             ModernDialog(self.root, "Success", f"Saved: {name}", "info")
@@ -673,12 +894,21 @@ class OmenGUI:
             self.rainbow_thread = None
             self.update_rainbow_button_state()
         try:
-            p_dir = os.path.join(BASE_DIR, "profiles")
+            p_dir = _get_profiles_dir()
             with open(os.path.join(p_dir, f"{name}.json"), "r") as f:
                 self.session_state = json.load(f)
+            if "p" in self.session_state:
+                self.session_state["p_icon"] = self.session_state["p"]
             for k, c in self.session_state.items():
-                if k not in self.lightbar_keys:
+                if k not in self.lightbar_keys and k != "p_icon":
                     self.kb.set_key_color(k, c[0], c[1], c[2])
+
+            if self.kb.is_4zone:
+                # Ensure all keys in each zone have uniform zone color
+                for zn, zc in self.kb.zone_colors.items():
+                    for k in self.kb.zones_data.get("zones", {}).get(zn, {}).get("keys", []):
+                        self.session_state[k] = zc
+
             self.kb.apply()
             if self.lb and self.lb.is_available():
                 try:
@@ -694,9 +924,20 @@ class OmenGUI:
 
 
     def draw_keyboard_init(self):
-        mx, my, bw, sp = 156, 80, 36, 2
+        bw, sp = 36, 2
         sym = {"tilde": "`", "minus": "-", "equal": "=", "backspace": "BSP", "tab": "TAB", "l_bracket": "[", "r_bracket": "]", "backslash": "\\", "caps_lock": "CAPS", "semicolon": ";", "quote": "'", "enter": "ENTER", "l_shift": "SHIFT", "comma": ",", "dot": ".", "slash": "/", "r_shift": "SHIFT", "l_ctrl": "CTRL", "l_win": "WIN", "l_alt": "ALT", "space": "SPACE", "r_alt": "ALT", "r_ctrl": "CTRL", "num_lock": "NUM", "num_slash": "/", "num_star": "*", "num_minus": "-", "num_plus": "+", "num_enter": "ENT", "num_dot": ".", "omen": "◆", "calculator": "田", "settings": "⚙", "power": "⏻"}
-        tr = mx + (15 * bw) + (14 * sp)
+
+        # Dynamic layout calculations based on numpad presence
+        canvas_w = 1050
+        main_cluster_w = (15 * bw) + (14 * sp)
+        if self.has_numpad:
+            total_kb_w = main_cluster_w + (sp * 2) + (4 * 34) + (3 * sp)
+        else:
+            total_kb_w = main_cluster_w
+
+        mx = max(30, (canvas_w - total_kb_w) // 2)
+        my = 80
+        tr = mx + main_cluster_w
         y_off = my
         
         for row_n in ["row_0", "row_1", "row_2", "row_3", "row_4", "row_5"]:
@@ -718,7 +959,8 @@ class OmenGUI:
                 tid = self.canvas.create_text(x_off+w/2, y_off+ch/2, text=sym.get(name, name.replace("num_","").upper()), fill="#AAAAAA", font=("Outfit", 7, "bold"), state="disabled")
                 self.key_items[name] = (rid, tid)
                 x_off += w + sp
-            if row_n == "row_0":
+
+            if row_n == "row_0" and self.has_numpad:
                 x_off = tr + sp * 2
                 for spec in ["omen", "calculator", "settings", "power"]:
                     rid = self.canvas.create_rectangle(x_off, y_off, x_off+34, y_off+20, fill="#252525", outline="#333333", tags=("key", spec))
@@ -733,21 +975,23 @@ class OmenGUI:
             tid = self.canvas.create_text(c[0]+c[2]/2, c[1]+c[3]/2, text=sym.get(n, n.upper()), fill="#AAAAAA", font=("Outfit", 7, "bold"), state="disabled")
             self.key_items[n] = (rid, tid)
             
-        nx, ny = tr + sp*2, my + 20 + sp
-        for r in [["num_lock", "num_slash", "num_star", "num_minus"], ["num_7", "num_8", "num_9", "num_plus"], ["num_4", "num_5", "num_6"], ["num_1", "num_2", "num_3", "num_enter"], ["num_0", "num_dot"]]:
-            x_off = nx
-            for k in r:
-                w, h = (70 if k == "num_0" else 34), (70 if k in ["num_plus", "num_enter"] else 34)
-                rid = self.canvas.create_rectangle(x_off, ny, x_off+w, ny+h, fill="#252525", outline="#333333", tags=("key", k))
-                tid = self.canvas.create_text(x_off+w/2, ny+h/2, text=sym.get(k, k.replace("num_","").upper()), fill="#AAAAAA", font=("Outfit", 7, "bold"), state="disabled")
-                self.key_items[k] = (rid, tid)
-                x_off += w + sp
-            ny += 34 + sp
+        if self.has_numpad:
+            nx, ny = tr + sp*2, my + 20 + sp
+            for r in [["num_lock", "num_slash", "num_star", "num_minus"], ["num_7", "num_8", "num_9", "num_plus"], ["num_4", "num_5", "num_6"], ["num_1", "num_2", "num_3", "num_enter"], ["num_0", "num_dot"]]:
+                x_off = nx
+                for k in r:
+                    w, h = (70 if k == "num_0" else 34), (70 if k in ["num_plus", "num_enter"] else 34)
+                    rid = self.canvas.create_rectangle(x_off, ny, x_off+w, ny+h, fill="#252525", outline="#333333", tags=("key", k))
+                    tid = self.canvas.create_text(x_off+w/2, ny+h/2, text=sym.get(k, k.replace("num_","").upper()), fill="#AAAAAA", font=("Outfit", 7, "bold"), state="disabled")
+                    self.key_items[k] = (rid, tid)
+                    x_off += w + sp
+                ny += 34 + sp
 
         # Draw Bottom Lightbar (4 zones) if supported
         if self.has_lightbar:
             lb_y = my + 20 + sp + (34 + sp) * 5 + 15
-            lb_total_w = tr + sp * 2 + 4 * 34 + 3 * sp - mx
+            kb_right = (tr + sp * 2 + 4 * 34 + 3 * sp) if self.has_numpad else tr
+            lb_total_w = kb_right - mx
             lb_zone_w = (lb_total_w - 3 * sp) // 4
             lb_x = mx
             for i, zone_name in enumerate(self.lightbar_keys, 1):
@@ -758,9 +1002,6 @@ class OmenGUI:
             
         with self.state_lock:
             self.update_key_visuals()
-
-
-
 
     def update_key_visuals(self):
         for name, (rid, tid) in self.key_items.items():
@@ -782,10 +1023,22 @@ class OmenGUI:
         self.apply_custom_color(int(hc[1:3], 16), int(hc[3:5], 16), int(hc[5:7], 16))
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Omen RGB Control Center GUI")
+    parser.add_argument("-s", "--simulate-4zone", action="store_true", default=SIMULATE_4ZONE,
+                        help="Run in 4-zone simulation mode without writing to hardware or filesystem")
+    parser.add_argument("-s1", "--simulate-1zone", action="store_true", default=SIMULATE_1ZONE,
+                        help="Run in single-zone simulation mode without writing to hardware or filesystem")
+    parser.add_argument("--no-numpad", dest="has_numpad", action="store_false", default=None,
+                        help="Render compact layout without numeric keypad")
+    parser.add_argument("--numpad", dest="has_numpad", action="store_true", default=None,
+                        help="Render full layout with numeric keypad")
+    args, _ = parser.parse_known_args()
     root = tk.Tk()
-    app = OmenGUI(root)
+    app = OmenGUI(root, simulate_4zone=args.simulate_4zone, simulate_1zone=args.simulate_1zone, has_numpad=args.has_numpad)
     root.mainloop()
 
 if __name__ == "__main__":
     main()
+
 

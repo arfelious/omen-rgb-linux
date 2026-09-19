@@ -1,0 +1,170 @@
+{
+  "zones": {
+    "right": {
+      "zone_id": 0,
+      "sysfs_name": "hp::kbd_zoned_backlight-right",
+      "occ_color": "#0099ff",
+      "description": "Right zone including numpad, navigation keys, delete, backspace, backslash, enter, right shift, and upper media/power keys",
+      "keys": [
+        "delete",
+        "omen",
+        "calculator",
+        "settings",
+        "power",
+        "backspace",
+        "backslash",
+        "enter",
+        "r_shift",
+        "left",
+        "up",
+        "down",
+        "right",
+        "num_lock",
+        "num_slash",
+        "num_star",
+        "num_minus",
+        "num_7",
+        "num_8",
+        "num_9",
+        "num_plus",
+        "num_4",
+        "num_5",
+        "num_6",
+        "num_1",
+        "num_2",
+        "num_3",
+        "num_enter",
+        "num_0",
+        "num_dot"
+      ]
+    },
+    "center": {
+      "zone_id": 1,
+      "sysfs_name": "hp::kbd_zoned_backlight-center",
+      "occ_color": "#7a00ff",
+      "description": "Central alphanumeric block from f6/6/t/g/b through r_bracket/quote/slash and spacebar",
+      "keys": [
+        "f6",
+        "f7",
+        "f8",
+        "f9",
+        "f10",
+        "f11",
+        "f12",
+        "6",
+        "7",
+        "8",
+        "9",
+        "0",
+        "minus",
+        "equal",
+        "t",
+        "y",
+        "u",
+        "i",
+        "o",
+        "p",
+        "l_bracket",
+        "r_bracket",
+        "g",
+        "h",
+        "j",
+        "k",
+        "l",
+        "semicolon",
+        "quote",
+        "b",
+        "n",
+        "m",
+        "comma",
+        "dot",
+        "slash",
+        "space",
+        "r_alt",
+        "r_ctrl",
+        "p_icon"
+      ]
+    },
+    "left": {
+      "zone_id": 2,
+      "sysfs_name": "hp::kbd_zoned_backlight-left",
+      "occ_color": "#ff3300",
+      "description": "Left section keys (esc through f5, tilde through 5, tab/q/e/r, caps/f, l_shift through v, and left modifiers)",
+      "keys": [
+        "esc",
+        "f1",
+        "f2",
+        "f3",
+        "f4",
+        "f5",
+        "tilde",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "tab",
+        "q",
+        "e",
+        "r",
+        "caps_lock",
+        "f",
+        "l_shift",
+        "z",
+        "x",
+        "c",
+        "v",
+        "l_ctrl",
+        "fn",
+        "l_win",
+        "l_alt"
+      ]
+    },
+    "wasd": {
+      "zone_id": 3,
+      "sysfs_name": "hp::kbd_zoned_backlight-wasd",
+      "occ_color": "#ffb700",
+      "description": "Dedicated WASD cluster for gaming navigation",
+      "keys": [
+        "w",
+        "a",
+        "s",
+        "d"
+      ]
+    }
+  },
+  "cutoffs": {
+    "row_0": {
+      "left": ["esc", "f1", "f2", "f3", "f4", "f5"],
+      "center": ["f6", "f7", "f8", "f9", "f10", "f11", "f12"],
+      "right": ["delete", "omen", "calculator", "settings", "power"]
+    },
+    "row_1": {
+      "left": ["tilde", "1", "2", "3", "4", "5"],
+      "center": ["6", "7", "8", "9", "0", "minus", "equal"],
+      "right": ["backspace", "num_lock", "num_slash", "num_star", "num_minus"]
+    },
+    "row_2": {
+      "left": ["tab", "q", "e", "r"],
+      "wasd": ["w"],
+      "center": ["t", "y", "u", "i", "o", "p", "l_bracket", "r_bracket"],
+      "right": ["backslash", "num_7", "num_8", "num_9", "num_plus"]
+    },
+    "row_3": {
+      "left": ["caps_lock", "f"],
+      "wasd": ["a", "s", "d"],
+      "center": ["g", "h", "j", "k", "l", "semicolon", "quote"],
+      "right": ["enter", "num_4", "num_5", "num_6"]
+    },
+    "row_4": {
+      "left": ["l_shift", "z", "x", "c", "v"],
+      "center": ["b", "n", "m", "comma", "dot", "slash"],
+      "right": ["r_shift", "num_1", "num_2", "num_3", "num_enter"]
+    },
+    "row_5": {
+      "left": ["l_ctrl", "fn", "l_win", "l_alt"],
+      "center": ["space", "r_alt", "r_ctrl"],
+      "right": ["left", "up", "down", "right", "num_0", "num_dot"]
+    }
+  }
+}

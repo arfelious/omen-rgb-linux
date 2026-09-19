@@ -13,8 +13,12 @@ import glob
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(BASE_DIR, 'src'))
 
-from driver import OmenKeyboard
-from lightbar import OmenLightbar
+try:
+    from omen_rgb.driver import OmenKeyboard, ZONE_NAMES_4
+    from omen_rgb.lightbar import OmenLightbar
+except ImportError:
+    from driver import OmenKeyboard, ZONE_NAMES_4
+    from lightbar import OmenLightbar
 
 def _parse_single_hex(s):
     s = str(s).strip()
@@ -126,13 +130,49 @@ def cmd_set_key(kb, args):
     success = kb.set_key_color(args.key, r, g, b)
     if success:
         kb.apply()
-        print(f"Set key '{args.key}' to RGB({r}, {g}, {b})")
-        updates = {args.key: (r, g, b)}
-        if args.key == "p":
-            updates["p_icon"] = (r, g, b)
+        if kb.is_4zone:
+            z_name = kb.key_to_zone.get(args.key, "unknown")
+            print(f"Set zone '{z_name}' (via key '{args.key}') to RGB({r}, {g}, {b})")
+            keys_in_z = kb.zones_data.get("zones", {}).get(z_name, {}).get("keys", [args.key])
+            updates = {k: (r, g, b) for k in keys_in_z}
+        else:
+            print(f"Set key '{args.key}' to RGB({r}, {g}, {b})")
+            updates = {args.key: (r, g, b)}
+            if args.key == "p":
+                updates["p_icon"] = (r, g, b)
         _update_active_state(updates)
     else:
         print(f"Error: Key '{args.key}' not found in key map.")
+
+def cmd_zone(kb, args):
+    colors = parse_color_list(args.color, expected_count=1)
+    r, g, b = colors[0]
+    zone_arg = args.zone_id.lower().strip()
+    if zone_arg.isdigit():
+        zone_arg = int(zone_arg)
+    kb.set_zone(zone_arg, r, g, b)
+    kb.apply()
+    
+    # Resolve display name
+    z_name = ZONE_NAMES_4[zone_arg] if isinstance(zone_arg, int) else zone_arg
+    print(f"Set keyboard zone '{z_name}' to RGB({r}, {g}, {b})")
+    keys_in_z = kb.zones_data.get("zones", {}).get(z_name, {}).get("keys", [])
+    if keys_in_z:
+        _update_active_state({k: (r, g, b) for k in keys_in_z})
+
+def cmd_zones(kb, args):
+    colors = parse_color_list(args.color, expected_count=4)
+    kb.set_zones(colors)
+    kb.apply()
+    print("Set keyboard zone colors:")
+    updates = {}
+    for i, zn in enumerate(["right", "center", "left", "wasd"]):
+        r, g, b = colors[i]
+        print(f"  Zone {i} ({zn}): RGB({r}, {g}, {b})")
+        keys_in_z = kb.zones_data.get("zones", {}).get(zn, {}).get("keys", [])
+        for k in keys_in_z:
+            updates[k] = (r, g, b)
+    _update_active_state(updates)
 
 def cmd_off(kb, args):
     print("Turning off all lights.")
@@ -141,82 +181,118 @@ def cmd_off(kb, args):
     updates = {k: (0, 0, 0) for k in _get_all_keyboard_keys(kb)}
     _update_active_state(updates)
 
-def cmd_profile(kb, args):
-    p_dir = os.path.join(BASE_DIR, "profiles")
-    name = args.name
-    p_path = os.path.join(p_dir, f"{name}.json") if not name.endswith(".json") else name
-    if not os.path.exists(p_path) and not name.endswith(".json"):
-        p_path = os.path.join(p_dir, f"{name}.json")
+def cmd_status(kb, args):
+    print(f"Keyboard Backend: {kb.backend}")
+    kb_type = kb.keyboard_type
+    if kb_type is not None:
+        print(f"Keyboard Type: {kb_type} ({kb.keyboard_type_name})")
+    print(f"Numeric Keypad: {'Present' if kb.has_numpad else 'Absent'}")
+    if kb.is_4zone:
 
-    if not os.path.exists(p_path):
-        print(f"Error: Profile '{name}' not found in {p_dir}")
-        return
+        print("4-Zone Keyboard (hp-wmi sysfs):")
+        live_colors = kb.get_zone_colors()
+        for zn in ["right", "center", "left", "wasd"]:
+            c = live_colors.get(zn, (0, 0, 0)) if live_colors else kb.zone_colors.get(zn, (0, 0, 0))
+            b = kb.get_zone_brightness(zn)
+            print(f"  Zone '{zn}': RGB{c}, Brightness={b}%")
+    elif kb.is_single_zone:
+        c = kb.zone_colors.get("backlight", (0, 0, 0))
+        b = kb.get_zone_brightness("backlight")
+        print(f"Single-Zone Keyboard (hp-wmi sysfs): RGB{c}, Brightness={b}%")
 
-    profile_name = os.path.basename(p_path).replace(".json", "")
-    print(f"Applying profile: {profile_name}")
-    try:
-        with open(p_path, "r") as f:
-            state = json.load(f)
+    else:
+        print("Per-Key RGB Keyboard (USB HID 0d62:54bf)")
 
-        for k_name, color in state.items():
-            if not k_name.startswith("lb_zone_"):
-                kb.set_key_color(k_name, color[0], color[1], color[2])
-        kb.apply()
-
-        if OmenLightbar.is_supported():
-            lb_colors = [state.get(f"lb_zone_{i}") for i in range(1, 5) if f"lb_zone_{i}" in state]
-            if len(lb_colors) == 4:
-                try:
-                    lb = OmenLightbar()
-                    lb.set_colors(lb_colors)
-                    print("Lightbar colors applied from profile.")
-                except Exception as e:
-                    print(f"Lightbar notice: {e}")
-
-        # Save active state so GUI and next boot match
-        config_dir = os.path.expanduser("~/.config/omen-rgb-linux")
-        os.makedirs(config_dir, exist_ok=True)
-        state_file = os.path.join(config_dir, "state.json")
-        with open(state_file, "w") as f:
-            json.dump(state, f)
-
-        print(f"Profile '{profile_name}' applied successfully.")
-    except Exception as e:
-        print(f"Error loading profile: {e}")
-
-def cmd_list(kb, args):
-    p_dir = os.path.join(BASE_DIR, "profiles")
-    profiles = glob.glob(os.path.join(p_dir, "*.json"))
-    
-    if not profiles:
-        print("No profiles found.")
-        return
-
-    print("Available Profiles:")
-    for p in sorted(profiles):
-        print(f"  - {os.path.basename(p).replace('.json', '')}")
+    if OmenLightbar.is_supported():
+        lb = OmenLightbar()
+        b = lb.get_brightness()
+        colors = lb.get_colors()
+        print(f"\nLightbar Backend: {lb.backend}")
+        print(f"Lightbar Brightness: {b if b is not None else 'unknown'}%")
+        if colors:
+            print("Lightbar Zones:")
+            for i, c in enumerate(colors, 1):
+                print(f"  Zone {i}: RGB{c}")
 
 def cmd_rainbow(kb, args):
     import colorsys
     print("Starting rainbow wave. Press Ctrl+C to stop.")
     
-    keys = {}
-    for cat in kb.key_map.values():
-        keys.update(cat)
-    sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["offset"])
-    
     t = 0
     try:
         while True:
-            for i, name in enumerate(sorted_keys):
-                hue = (t + (i / len(sorted_keys))) % 1.0
-                r, g, b = [int(x * 255) for x in colorsys.hsv_to_rgb(hue, 1.0, 1.0)]
-                kb.set_key_color(name, r, g, b)
-            kb.apply()
-            t += 0.05
+            if kb.is_4zone:
+                zone_offsets = {"left": 0.0, "wasd": 0.15, "center": 0.35, "right": 0.6}
+                for zn, offset in zone_offsets.items():
+                    zhue = (t + offset) % 1.0
+                    zr, zg, zb = [int(x * 255) for x in colorsys.hsv_to_rgb(zhue, 1.0, 1.0)]
+                    kb.set_zone(zn, zr, zg, zb)
+                kb.apply()
+                t += 0.02
+            elif kb.is_single_zone:
+                r, g, b = [int(x * 255) for x in colorsys.hsv_to_rgb(t % 1.0, 1.0, 1.0)]
+                kb.set_all(r, g, b)
+                kb.apply()
+                t += 0.02
+            else:
+                keys = {}
+                for cat in kb.key_map.values():
+                    keys.update(cat)
+                sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["offset"])
+                p_hue = None
+                for i, name in enumerate(sorted_keys):
+                    if name == "p_icon" and p_hue is not None:
+                        hue = p_hue
+                    else:
+                        hue = (t + (i / len(sorted_keys))) % 1.0
+                        if name == "p":
+                            p_hue = hue
+                    r, g, b = [int(x * 255) for x in colorsys.hsv_to_rgb(hue, 1.0, 1.0)]
+                    kb.set_key_color(name, r, g, b)
+                kb.apply()
+                t += 0.05
             time.sleep(0.02)
     except KeyboardInterrupt:
         print("\nStopping rainbow wave.")
+
+
+def _get_profiles_dir():
+    config_dir = os.path.expanduser("~/.config/omen-rgb-linux/profiles")
+    if os.path.exists(config_dir):
+        return config_dir
+    repo_p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiles")
+    if os.path.exists(repo_p):
+        return repo_p
+    os.makedirs(config_dir, exist_ok=True)
+    return config_dir
+
+
+def cmd_list(kb, args):
+    p_dir = _get_profiles_dir()
+    profiles = [os.path.splitext(f)[0] for f in os.listdir(p_dir) if f.endswith(".json")] if os.path.exists(p_dir) else []
+    if profiles:
+        print("Available profiles:")
+        for p in sorted(profiles):
+            print(f"  - {p}")
+    else:
+        print("No profiles found.")
+
+
+def cmd_profile(kb, args):
+    name = args.name
+    p_dir = _get_profiles_dir()
+    p_file = os.path.join(p_dir, f"{name}.json")
+    if not os.path.exists(p_file):
+        print(f"Profile '{name}' not found.")
+        return
+    with open(p_file, "r") as f:
+        data = json.load(f)
+    for k, c in data.items():
+        if isinstance(c, (list, tuple)) and len(c) == 3:
+            kb.set_key_color(k, c[0], c[1], c[2])
+    kb.apply()
+    print(f"Profile '{name}' applied.")
+
 
 def cmd_lightbar(args):
     lb = OmenLightbar()
@@ -228,6 +304,12 @@ def cmd_lightbar(args):
         lb.set_static(r, g, b, brightness=brightness)
         print(f"Lightbar set to static RGB({r}, {g}, {b}) brightness={brightness}")
         updates = {f"lb_zone_{i}": (r, g, b) for i in range(1, 5)}
+    elif args.lb_cmd == "zone":
+        colors = parse_color_list(args.color, expected_count=1)
+        r, g, b = colors[0]
+        lb.set_zone(args.zone_id, r, g, b, brightness=args.brightness)
+        print(f"Lightbar Zone {args.zone_id} set to RGB({r}, {g}, {b})" + (f" brightness={args.brightness}" if args.brightness is not None else ""))
+        updates = {f"lb_zone_{args.zone_id}": (r, g, b)}
     elif args.lb_cmd == "zones":
         colors = parse_color_list(args.color, expected_count=4)
         lb.set_colors(colors, brightness=brightness)
@@ -235,6 +317,21 @@ def cmd_lightbar(args):
         for i, (r, g, b) in enumerate(colors, 1):
             print(f"  Zone {i}: RGB({r}, {g}, {b})")
             updates[f"lb_zone_{i}"] = (r, g, b)
+    elif args.lb_cmd == "brightness":
+        lb.set_brightness(args.level)
+        print(f"Lightbar brightness set to {args.level}%")
+    elif args.lb_cmd == "status":
+        backend = lb.backend
+        b = lb.get_brightness()
+        colors = lb.get_colors()
+        print(f"Lightbar backend: {backend}")
+        print(f"Lightbar brightness: {b if b is not None else 'unknown'}%")
+        if colors:
+            print("Zone colors:")
+            for i, (r, g, b_c) in enumerate(colors, 1):
+                print(f"  Zone {i}: RGB({r}, {g}, {b_c})")
+        else:
+            print("Could not query zone colors.")
     elif args.lb_cmd == "off":
         lb.turn_off()
         print("Lightbar turned off.")
@@ -327,6 +424,10 @@ def cmd_all(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Omen RGB Linux CLI")
+    parser.add_argument("-s", "--simulate-4zone", action="store_true",
+                        help="Run in 4-zone simulation mode without writing to hardware or filesystem")
+    parser.add_argument("-s1", "--simulate-1zone", action="store_true",
+                        help="Run in single-zone simulation mode without writing to hardware or filesystem")
     subparsers = parser.add_subparsers(dest="command")
 
     # All (keyboard + lightbar if present)
@@ -341,6 +442,18 @@ def main():
 
     all_subparsers.add_parser("off", help="Turn off keyboard and lightbar")
     all_subparsers.add_parser("rainbow", help="Start rainbow wave on keyboard and lightbar")
+
+    # Keyboard Zone
+    p_kbd_zone = subparsers.add_parser("zone", help="Set color for a keyboard zone (right, center, left, wasd or 0..3)")
+    p_kbd_zone.add_argument("zone_id", help="Zone name (right, center, left, wasd) or index (0..3)")
+    p_kbd_zone.add_argument("color", nargs="+", help="Color as hex (#ff9900) or RGB components (255 153 0)")
+
+    # Keyboard Zones
+    p_kbd_zones = subparsers.add_parser("zones", help="Set distinct colors for keyboard zones (right, center, left, wasd)")
+    p_kbd_zones.add_argument("color", nargs="+", help="4 hex colors (#ff9900 ...) or 12 RGB values (255 153 0 ...)")
+
+    # Status
+    subparsers.add_parser("status", help="Query keyboard and lightbar status")
 
     # Static
     p_static = subparsers.add_parser("static", help="Set a solid color (accepts #RRGGBB or R G B)")
@@ -365,20 +478,34 @@ def main():
     subparsers.add_parser("rainbow", help="Start a rainbow wave")
 
     # Lightbar
-    p_lightbar = subparsers.add_parser("lightbar", help="Control bottom light bar (requires acpi_call)")
+    p_lightbar = subparsers.add_parser("lightbar", help="Control bottom light bar (Linux Multicolor LED subsystem)")
     lb_subparsers = p_lightbar.add_subparsers(dest="lb_cmd", help="Lightbar subcommands")
     
     lb_static = lb_subparsers.add_parser("static", help="Set static color for all 4 lightbar zones")
     lb_static.add_argument("color", nargs="+", help="Color as hex (#ff9900) or RGB components (255 153 0)")
     lb_static.add_argument("--brightness", type=int, default=100, help="Brightness (0-100)")
 
+    lb_zone = lb_subparsers.add_parser("zone", help="Set color for a single lightbar zone (1 to 4)")
+    lb_zone.add_argument("zone_id", type=int, choices=[1, 2, 3, 4], help="Zone number (1-4)")
+    lb_zone.add_argument("color", nargs="+", help="Color as hex (#ff9900) or RGB components (255 153 0)")
+    lb_zone.add_argument("--brightness", type=int, default=None, help="Brightness (0-100)")
+
     lb_zones = lb_subparsers.add_parser("zones", help="Set distinct colors for lightbar zones 1..4")
     lb_zones.add_argument("color", nargs="+", help="4 hex colors (#ff9900 ...) or 12 RGB values (255 153 0 ...)")
     lb_zones.add_argument("--brightness", type=int, default=100, help="Brightness (0-100)")
 
+    lb_bright = lb_subparsers.add_parser("brightness", help="Set brightness level without changing colors")
+    lb_bright.add_argument("level", type=int, help="Brightness percentage (0-100)")
+
+    lb_subparsers.add_parser("status", help="Query active lightbar status and zone colors")
     lb_subparsers.add_parser("off", help="Turn off bottom lightbar")
 
     args = parser.parse_args()
+    
+    if getattr(args, "simulate_4zone", False):
+        os.environ["OMEN_SIMULATE_4ZONE"] = "1"
+    if getattr(args, "simulate_1zone", False):
+        os.environ["OMEN_SIMULATE_1ZONE"] = "1"
     
     if not args.command:
         parser.print_help()
@@ -406,6 +533,12 @@ def main():
         kb = OmenKeyboard()
         if args.command == "static":
             cmd_static(kb, args)
+        elif args.command == "zone":
+            cmd_zone(kb, args)
+        elif args.command == "zones":
+            cmd_zones(kb, args)
+        elif args.command == "status":
+            cmd_status(kb, args)
         elif args.command == "set-key":
             cmd_set_key(kb, args)
         elif args.command == "off":

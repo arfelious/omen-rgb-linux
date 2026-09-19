@@ -1,0 +1,31 @@
+[project]
+name = "omen-rgb"
+version = "1.0.0"
+description = "RGB keyboard and lightbar controller for HP OMEN laptops on Linux"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Arfelious" }]
+requires-python = ">=3.10"
+dependencies = [
+    "hidapi>=0.14.0",
+]
+
+[project.scripts]
+omen-rgb = "omen_rgb.cli:main"
+omen-rgb-gui = "omen_rgb.gui:main"
+omen-cli = "omen_rgb.cli:main"
+omen-gui = "omen_rgb.gui:main"
+
+[project.urls]
+Homepage = "https://github.com/arfelious/omen-rgb-linux"
+Repository = "https://github.com/arfelious/omen-rgb-linux"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/omen_rgb"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/README.md", "/LICENSE", "/data", "/assets"]
