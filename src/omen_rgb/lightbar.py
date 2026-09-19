@@ -1,31 +1,60 @@
 #!/usr/bin/env python3
 # Omen Lightbar Controller - Linux Support for HP OMEN Light Strip
+# Supports:
+# 1. Linux Multicolor LED subsystem (/sys/class/leds/hp::lightbar-*) via hp-wmi
+# 2. ACPI/WMI command interface (/proc/acpi/call) with onboard animation engine
 # Copyright (C) 2026 arfelious
 
 import os
 import re
+import struct
 
 SYSFS_LEDS_BASE = "/sys/class/leds"
 LED_NAME_PREFIX = "hp::lightbar-"
 DEFAULT_NUM_ZONES = 4
 
+# The bar's nine device-side animations, selected by payload byte [1] of command 131081.
+LB_ANIMATIONS = {
+    "lighting-sync": 1,
+    "color-cycle": 2,
+    "starlight": 3,
+    "breathing": 4,
+    "wave": 6,
+    "raindrop": 7,
+    "audio-pulse": 8,
+    "confetti": 9,
+    "sun": 10,
+    "swipe": 11,
+}
+
+LB_SPEEDS = {"slow": 0, "medium": 1, "fast": 2}
+LB_DIRECTIONS = {"left": 4, "right": 8}
+LB_THEMES = {"galaxy": 16, "volcano": 32, "jungle": 48, "ocean": 64, "custom": 80}
+
+# The firmware special-cases #FFFFFF and stores #FEA3DA (purple).
+# #FFFFFE avoids the substitution and renders pure white.
+_WHITE_SUBSTITUTION = {(0xFF, 0xFF, 0xFF): (0xFF, 0xFF, 0xFE)}
+
 
 class OmenLightbar:
     """
     Controller for the HP OMEN Laptop bottom light strip (Dojo Lightbar).
-    Uses the Linux Multicolor LED subsystem (/sys/class/leds/hp::lightbar-*)
-    exposed by the custom hp-wmi kernel driver of omen-fan-control.
+    Supports Linux Multicolor LED subsystem (/sys/class/leds/hp::lightbar-*)
+    and ACPI call direct WMI interface (/proc/acpi/call) with hardware animations.
     """
 
-    def __init__(self):
+    AVOID_FIRMWARE_WHITE = True
+
+    def __init__(self, acpi_path=None):
+        self.acpi_path = acpi_path or self._detect_acpi_path()
         self.backend = self._detect_backend()
+
+    def _detect_acpi_path(self):
+        return "\\_SB.WMID.WMAA"
 
     @classmethod
     def get_zone_devices(cls):
-        """
-        Discovers registered Linux Multicolor LED devices for the lightbar.
-        Returns a list of tuples: [(zone_idx, sysfs_path), ...] sorted by zone_idx (1-indexed).
-        """
+        """Discovers registered Linux Multicolor LED devices for the lightbar."""
         if not os.path.exists(SYSFS_LEDS_BASE):
             return []
         devices = []
@@ -45,28 +74,18 @@ class OmenLightbar:
 
     @classmethod
     def get_num_zones(cls):
-        """Returns the number of detected hardware lightbar zones (defaults to 4)."""
         zones = cls.get_zone_devices()
         return len(zones) if zones else DEFAULT_NUM_ZONES
 
     @classmethod
     def _detect_backend(cls):
-        """
-        Detects the available hardware control interface.
-        Returns 'sysfs_leds' if hp::lightbar-* multicolor LED devices exist, else None.
-        """
         if cls.get_zone_devices():
             return "sysfs_leds"
         return None
 
     @classmethod
     def ensure_available(cls, auto_load=True):
-        """
-        Ensures a lightbar interface is available.
-        Checks for native kernel sysfs (/sys/class/leds/hp::lightbar-*).
-        """
-        backend = cls._detect_backend()
-        if backend == "sysfs_leds":
+        if cls.get_zone_devices():
             return True
 
         msg = (
@@ -79,72 +98,65 @@ class OmenLightbar:
 
     @classmethod
     def is_available(cls):
-        """Checks if a lightbar interface is available."""
         try:
             return cls.ensure_available(auto_load=True)
         except RuntimeError:
             return False
 
+    @staticmethod
+    def _is_success_response(response):
+        if not response:
+            return False
+        res = response.upper()
+        if "50415353" in res or "PASS" in res:
+            return True
+        if "0X50, 0X41, 0X53, 0X53" in res or "0X50,0X41,0X53,0X53" in res.replace(" ", ""):
+            return True
+        if res.startswith("{"):
+            parts = [p.strip() for p in res.strip("{}").split(",") if p.strip()]
+            if len(parts) >= 4:
+                try:
+                    bytes_val = [int(p, 16) for p in parts[:4]]
+                    if bytes_val == [0x50, 0x41, 0x53, 0x53]:
+                        return True
+                except ValueError:
+                    pass
+        return False
+
     @classmethod
     def is_supported(cls):
-        """
-        Queries system to detect if HP OMEN Lightbar hardware is supported.
-        Under the hp-wmi driver, hp_wmi_lightbar_setup probes the hardware;
-        if unsupported, it returns -ENODEV and no sysfs entries are registered.
-        """
         return len(cls.get_zone_devices()) > 0
 
     @staticmethod
     def _permission_error_msg(path):
-        return (
-            f"Permission denied writing to {path}.\n"
-            "To resolve this, run as root (sudo) or install a udev rule:\n"
-            '  echo \'SUBSYSTEM=="leds", KERNEL=="hp::lightbar-*", ACTION=="add", '
-            'RUN+="/bin/chmod a+w /sys/class/leds/%k/brightness /sys/class/leds/%k/multi_intensity"\' '
-            "| sudo tee /etc/udev/rules.d/99-hp-omen-lightbar.rules\n"
-            "  sudo udevadm control --reload-rules && sudo udevadm trigger"
-        )
+        return f"Permission denied writing to {path}. Please run as root (sudo)."
 
     def set_zone(self, zone_idx, r, g, b, brightness=None):
-        """
-        Set color (and optional brightness) for a single specific zone.
-
-        Parameters:
-            zone_idx (int): Zone number (1-indexed: 1 to 4).
-            r, g, b (int): Color components (0-255).
-            brightness (int, optional): Brightness level (0-100).
-        """
+        """Sets color (and optional brightness) for a single lightbar zone (1-indexed)."""
         self.ensure_available(auto_load=True)
         self.backend = self._detect_backend()
 
-        r = max(0, min(255, int(r)))
-        g = max(0, min(255, int(g)))
-        b = max(0, min(255, int(b)))
+        if self.AVOID_FIRMWARE_WHITE and (r, g, b) in _WHITE_SUBSTITUTION:
+            r, g, b = _WHITE_SUBSTITUTION[(r, g, b)]
 
         zone_dir = os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{zone_idx}")
         if not os.path.exists(zone_dir):
             raise ValueError(f"Lightbar zone {zone_idx} not found at {zone_dir}")
         try:
+            r_c = max(0, min(255, int(r)))
+            g_c = max(0, min(255, int(g)))
+            b_c = max(0, min(255, int(b)))
             with open(os.path.join(zone_dir, "multi_intensity"), "w") as f:
-                f.write(f"{r} {g} {b}\n")
+                f.write(f"{r_c} {g_c} {b_c}\n")
             if brightness is not None:
                 scaled_b = max(0, min(255, int(round(brightness * 2.55))))
-            else:
-                try:
-                    with open(os.path.join(zone_dir, "brightness"), "r") as f:
-                        scaled_b = int(f.read().strip())
-                except Exception:
-                    scaled_b = 255
-            with open(os.path.join(zone_dir, "brightness"), "w") as f:
-                f.write(f"{scaled_b}\n")
+                with open(os.path.join(zone_dir, "brightness"), "w") as f:
+                    f.write(f"{scaled_b}\n")
             return True
         except PermissionError:
             raise PermissionError(self._permission_error_msg(zone_dir))
 
     def set_zone_brightness(self, zone_idx, brightness):
-        """
-        Sets brightness (0-100) for a single specific zone.
-        """
         self.ensure_available(auto_load=True)
         self.backend = self._detect_backend()
         scaled_b = max(0, min(255, int(round(brightness * 2.55))))
@@ -159,14 +171,70 @@ class OmenLightbar:
         except PermissionError:
             raise PermissionError(self._permission_error_msg(zone_dir))
 
-    def set_colors(self, colors, brightness=100):
-        """
-        Set color of all lightbar zones.
+    # ----------------- ACPI Transport Helpers -----------------
 
-        Parameters:
-            colors (list of tuples): Up to 4 (R, G, B) tuples for zones 1 to 4.
-            brightness (int, optional): Brightness level (0-100). Default is 100.
-        """
+    def _build_payload(self, colors, brightness=100, effect=0, config=0, tribe=0, bass=0):
+        colors = list(colors)
+        if len(colors) > 4:
+            colors = colors[:4]
+        while len(colors) < 4:
+            colors.append((0, 0, 0))
+
+        if self.AVOID_FIRMWARE_WHITE:
+            colors = [_WHITE_SUBSTITUTION.get(tuple(c), c) for c in colors]
+
+        data = bytearray(128)
+        data[0] = 0
+        data[1] = effect & 0xFF
+        data[2] = config & 0xFF
+        data[3] = max(0, min(100, brightness))
+        data[4] = max(0, min(255, tribe))
+        data[5] = max(0, min(255, bass))
+        data[6] = len(colors)
+
+        offset = 7
+        for r, g, b in colors:
+            data[offset] = max(0, min(255, r))
+            data[offset + 1] = max(0, min(255, g))
+            data[offset + 2] = max(0, min(255, b))
+            offset += 3
+
+        header = struct.pack("<4sIII", b"SECU", 131081, 11, 128)
+        full_buffer = header + data
+        return f"b{full_buffer.hex()}"
+
+    def _write_acpi(self, hex_arg):
+        acpi_cmd = f"{self.acpi_path} 0 3 {hex_arg}"
+        try:
+            with open("/proc/acpi/call", "w") as f:
+                f.write(acpi_cmd)
+            with open("/proc/acpi/call", "r") as f:
+                response = f.read().strip()
+            if self._is_success_response(response):
+                return True
+            raise RuntimeError(f"BIOS ACPI call failed. Response: {response}")
+        except PermissionError:
+            raise PermissionError("Permission denied when writing to /proc/acpi/call. Please run as root (sudo).")
+        except FileNotFoundError:
+            raise RuntimeError("acpi_call module missing (/proc/acpi/call not found).")
+
+    @staticmethod
+    def _pack_config(speed="medium", direction="left", theme="galaxy"):
+        def pick(table, value, what):
+            if isinstance(value, int):
+                return value
+            key = str(value).strip().lower()
+            if key not in table:
+                raise ValueError(f"Unknown {what} '{value}'. Choose one of: {', '.join(table)}")
+            return table[key]
+
+        return (pick(LB_SPEEDS, speed, "speed")
+                | pick(LB_DIRECTIONS, direction, "direction")
+                | pick(LB_THEMES, theme, "theme"))
+
+    # ----------------- Control Methods -----------------
+
+    def set_colors(self, colors, brightness=100):
         self.ensure_available(auto_load=True)
         self.backend = self._detect_backend()
 
@@ -177,173 +245,153 @@ class OmenLightbar:
         while len(colors) < num_zones:
             colors.append((0, 0, 0))
 
-        try:
-            zones = self.get_zone_devices() or [
-                (i, os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{i}"))
-                for i in range(1, num_zones + 1)
-            ]
+        if self.AVOID_FIRMWARE_WHITE:
+            colors = [_WHITE_SUBSTITUTION.get(tuple(c), c) for c in colors]
 
-            # Write multi_intensity to all zones first
-            for (zone_num, zone_dir), (r, g, b) in zip(zones, colors):
-                r_c = max(0, min(255, int(r)))
-                g_c = max(0, min(255, int(g)))
-                b_c = max(0, min(255, int(b)))
-                with open(os.path.join(zone_dir, "multi_intensity"), "w") as f:
-                    f.write(f"{r_c} {g_c} {b_c}\n")
+        if self.backend == "sysfs_leds":
+            try:
+                zones = self.get_zone_devices() or [
+                    (i, os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{i}"))
+                    for i in range(1, num_zones + 1)
+                ]
+                for (zone_num, zone_dir), (r, g, b) in zip(zones, colors):
+                    r_c = max(0, min(255, int(r)))
+                    g_c = max(0, min(255, int(g)))
+                    b_c = max(0, min(255, int(b)))
+                    with open(os.path.join(zone_dir, "multi_intensity"), "w") as f:
+                        f.write(f"{r_c} {g_c} {b_c}\n")
 
-            # Apply brightness to commit hardware changes
-            for zone_num, zone_dir in zones:
-                if brightness is not None:
-                    scaled_b = max(0, min(255, int(round(brightness * 2.55))))
-                else:
-                    try:
-                        with open(os.path.join(zone_dir, "brightness"), "r") as f:
-                            scaled_b = int(f.read().strip())
-                    except Exception:
+                for zone_num, zone_dir in zones:
+                    if brightness is not None:
+                        scaled_b = max(0, min(255, int(round(brightness * 2.55))))
+                    else:
                         scaled_b = 255
-                with open(os.path.join(zone_dir, "brightness"), "w") as f:
-                    f.write(f"{scaled_b}\n")
-            return True
-        except PermissionError:
-            raise PermissionError(self._permission_error_msg(SYSFS_LEDS_BASE))
+                    with open(os.path.join(zone_dir, "brightness"), "w") as f:
+                        f.write(f"{scaled_b}\n")
+                return True
+            except PermissionError:
+                raise PermissionError(self._permission_error_msg(SYSFS_LEDS_BASE))
 
-    def set_brightness(self, brightness):
+        # Fallback to ACPI call
+        return self._write_acpi(self._build_payload(colors, brightness))
+
+    def set_animation(self, effect, theme="galaxy", speed="medium", direction="left",
+                      colors=None, brightness=100, levels=(0, 0)):
         """
-        Sets brightness level (0-100) across all zones without modifying their RGB color intensities.
+        Run one of the bar's nine device-side animations via ACPI WMI command 131081.
         """
         self.ensure_available(auto_load=True)
-        self.backend = self._detect_backend()
-        scaled_b = max(0, min(255, int(round(brightness * 2.55))))
 
-        try:
-            zones = self.get_zone_devices() or [
-                (i, os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{i}"))
-                for i in range(1, self.get_num_zones() + 1)
-            ]
-            for zone_num, zone_dir in zones:
-                with open(os.path.join(zone_dir, "brightness"), "w") as f:
-                    f.write(f"{scaled_b}\n")
-            return True
-        except PermissionError:
-            raise PermissionError(self._permission_error_msg(SYSFS_LEDS_BASE))
+        if isinstance(effect, str):
+            key = effect.strip().lower()
+            if key not in LB_ANIMATIONS:
+                raise ValueError(
+                    f"Unknown animation '{effect}'. Choose one of: {', '.join(LB_ANIMATIONS)}")
+            effect = LB_ANIMATIONS[key]
+
+        tribe, bass = (list(levels) + [0, 0])[:2]
+        payload = self._build_payload(
+            colors or [(0, 0, 0)] * 4,
+            brightness=brightness,
+            effect=effect,
+            config=self._pack_config(speed, direction, theme),
+            tribe=tribe,
+            bass=bass,
+        )
+        return self._write_acpi(payload)
+
+    def set_brightness(self, brightness):
+        self.ensure_available(auto_load=True)
+        self.backend = self._detect_backend()
+
+        if self.backend == "sysfs_leds":
+            scaled_b = max(0, min(255, int(round(brightness * 2.55))))
+            try:
+                zones = self.get_zone_devices() or [
+                    (i, os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{i}"))
+                    for i in range(1, self.get_num_zones() + 1)
+                ]
+                for zone_num, zone_dir in zones:
+                    with open(os.path.join(zone_dir, "brightness"), "w") as f:
+                        f.write(f"{scaled_b}\n")
+                return True
+            except PermissionError:
+                raise PermissionError(self._permission_error_msg(SYSFS_LEDS_BASE))
+
+        # Under ACPI call, re-apply current colors with new brightness
+        cur_colors = self.get_colors() or [(255, 153, 0)] * 4
+        return self.set_colors(cur_colors, brightness=brightness)
 
     def set_static(self, r, g, b, brightness=100):
-        """Sets all lightbar zones to the same RGB color."""
         num_zones = self.get_num_zones()
         return self.set_colors([(r, g, b)] * num_zones, brightness=brightness)
 
     def turn_off(self):
-        """Turns off all lightbar zones."""
         return self.set_static(0, 0, 0, brightness=0)
 
     def get_zone_brightness(self, zone_idx):
-        """
-        Queries brightness level (0-100) for a specific zone.
-        """
         self.ensure_available(auto_load=True)
         self.backend = self._detect_backend()
 
-        zone_dir = os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{zone_idx}")
-        b_file = os.path.join(zone_dir, "brightness")
-        if not os.path.exists(b_file):
-            return None
-        try:
-            with open(b_file, "r") as f:
-                val = int(f.read().strip())
-            max_b = 255
-            max_file = os.path.join(zone_dir, "max_brightness")
-            if os.path.exists(max_file):
-                try:
-                    with open(max_file, "r") as mf:
-                        max_b = int(mf.read().strip()) or 255
-                except Exception:
-                    pass
-            return int(round((val / max_b) * 100))
-        except Exception:
-            return None
+        if self.backend == "sysfs_leds":
+            zone_dir = os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{zone_idx}")
+            b_file = os.path.join(zone_dir, "brightness")
+            if not os.path.exists(b_file):
+                return None
+            try:
+                with open(b_file, "r") as f:
+                    val = int(f.read().strip())
+                return int(round((val / 255.0) * 100))
+            except Exception:
+                return None
+        return None
 
     def get_zone_color(self, zone_idx, effective=False):
-        """
-        Queries active color for a specific zone.
-
-        Parameters:
-            zone_idx (int): 1-indexed zone number.
-            effective (bool): If True, scales intensity by the zone's brightness.
-
-        Returns:
-            (R, G, B) tuple or None.
-        """
         self.ensure_available(auto_load=True)
         self.backend = self._detect_backend()
 
-        zone_dir = os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{zone_idx}")
-        intensity_file = os.path.join(zone_dir, "multi_intensity")
-        if not os.path.exists(intensity_file):
-            return None
-        try:
-            with open(intensity_file, "r") as f:
-                parts = [int(v) for v in f.read().split()]
-            if len(parts) < 3:
+        if self.backend == "sysfs_leds":
+            zone_dir = os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{zone_idx}")
+            intensity_file = os.path.join(zone_dir, "multi_intensity")
+            if not os.path.exists(intensity_file):
                 return None
-            r, g, b = parts[0], parts[1], parts[2]
-            if effective:
-                b_pct = (self.get_zone_brightness(zone_idx) or 100) / 100.0
-                r = int(round(r * b_pct))
-                g = int(round(g * b_pct))
-                b = int(round(b * b_pct))
-            return (r, g, b)
-        except Exception:
-            return None
+            try:
+                with open(intensity_file, "r") as f:
+                    parts = [int(v) for v in f.read().split()]
+                if len(parts) < 3:
+                    return None
+                r, g, b = parts[0], parts[1], parts[2]
+                if effective:
+                    b_pct = (self.get_zone_brightness(zone_idx) or 100) / 100.0
+                    r = int(round(r * b_pct))
+                    g = int(round(g * b_pct))
+                    b = int(round(b * b_pct))
+                return (r, g, b)
+            except Exception:
+                return None
+        return None
 
     def get_brightness(self):
-        """
-        Returns the current lightbar brightness level (0-100), or None if unavailable.
-        """
-        self.ensure_available(auto_load=True)
-        self.backend = self._detect_backend()
-
-        try:
-            zone_dir = os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}1")
-            with open(os.path.join(zone_dir, "brightness"), "r") as f:
-                val = int(f.read().strip())
-            max_b = 255
-            max_file = os.path.join(zone_dir, "max_brightness")
-            if os.path.exists(max_file):
-                try:
-                    with open(max_file, "r") as mf:
-                        max_b = int(mf.read().strip()) or 255
-                except Exception:
-                    pass
-            return int(round((val / max_b) * 100))
-        except Exception:
-            return None
+        return self.get_zone_brightness(1)
 
     def get_colors(self, effective=False):
-        """
-        Queries active lightbar zone colors.
-
-        Parameters:
-            effective (bool): If True, returned RGB values are scaled by current brightness.
-                              If False (default), returns raw RGB intensity palette.
-
-        Returns:
-            list of (R, G, B) tuples or None if unsupported/failed.
-        """
         self.ensure_available(auto_load=True)
         self.backend = self._detect_backend()
 
-        try:
-            zones = self.get_zone_devices() or [
-                (i, os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{i}"))
-                for i in range(1, self.get_num_zones() + 1)
-            ]
-            colors = []
-            for zone_num, zone_dir in zones:
-                color = self.get_zone_color(zone_num, effective=effective)
-                if color is None:
-                    return None
-                colors.append(color)
-            return colors if colors else None
-        except Exception as e:
-            print(f"Lightbar leds get_colors notice: {e}")
-            return None
+        if self.backend == "sysfs_leds":
+            try:
+                zones = self.get_zone_devices() or [
+                    (i, os.path.join(SYSFS_LEDS_BASE, f"{LED_NAME_PREFIX}{i}"))
+                    for i in range(1, self.get_num_zones() + 1)
+                ]
+                colors = []
+                for zone_num, zone_dir in zones:
+                    color = self.get_zone_color(zone_num, effective=effective)
+                    if color is None:
+                        return None
+                    colors.append(color)
+                return colors if colors else None
+            except Exception as e:
+                print(f"Lightbar leds get_colors notice: {e}")
+                return None
+        return None

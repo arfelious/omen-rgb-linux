@@ -1,420 +1,423 @@
 {
-  "row_0": {
-    "esc": {
-      "offset": 2,
-      "width": 2
+  "layout": "Dojo/Global",
+  "rows": {
+    "row_0": {
+      "esc": {
+        "hp": "KeyEsc",
+        "leds": [0,1]
+      },
+      "f1": {
+        "hp": "KeyF1",
+        "leds": [2,3]
+      },
+      "f2": {
+        "hp": "KeyF2",
+        "leds": [4,5]
+      },
+      "f3": {
+        "hp": "KeyF3",
+        "leds": [6,7]
+      },
+      "f4": {
+        "hp": "KeyF4",
+        "leds": [8,9]
+      },
+      "f5": {
+        "hp": "KeyF5",
+        "leds": [10,11]
+      },
+      "f6": {
+        "hp": "KeyF6",
+        "leds": [12,13]
+      },
+      "f7": {
+        "hp": "KeyF7",
+        "leds": [14,15]
+      },
+      "f8": {
+        "hp": "KeyF8",
+        "leds": [16,17]
+      },
+      "f9": {
+        "hp": "KeyF9",
+        "leds": [18,19]
+      },
+      "f10": {
+        "hp": "KeyF10",
+        "leds": [20,21]
+      },
+      "f11": {
+        "hp": "KeyF11",
+        "leds": [22,23]
+      },
+      "f12": {
+        "hp": "KeyF12",
+        "leds": [24,25]
+      },
+      "delete": {
+        "hp": "KeyDel",
+        "leds": [26,27]
+      }
     },
-    "f1": {
-      "offset": 4,
-      "width": 2
+    "row_1": {
+      "tilde": {
+        "hp": "KeyTilde",
+        "leds": [32,33]
+      },
+      "1": {
+        "hp": "Key1",
+        "leds": [34,35]
+      },
+      "2": {
+        "hp": "Key2",
+        "leds": [36,37]
+      },
+      "3": {
+        "hp": "Key3",
+        "leds": [38,39]
+      },
+      "4": {
+        "hp": "Key4",
+        "leds": [40,41]
+      },
+      "5": {
+        "hp": "Key5",
+        "leds": [42,43]
+      },
+      "6": {
+        "hp": "Key6",
+        "leds": [44,45]
+      },
+      "7": {
+        "hp": "Key7",
+        "leds": [46,47]
+      },
+      "8": {
+        "hp": "Key8",
+        "leds": [48,49]
+      },
+      "9": {
+        "hp": "Key9",
+        "leds": [50,51]
+      },
+      "0": {
+        "hp": "Key0",
+        "leds": [52,53]
+      },
+      "minus": {
+        "hp": "KeyHyphen",
+        "leds": [54,55]
+      },
+      "equal": {
+        "hp": "KeyEqual",
+        "leds": [56,57]
+      },
+      "backspace": {
+        "hp": "KeyBack",
+        "leds": [58,59,60,61,62,63]
+      }
     },
-    "f2": {
-      "offset": 6,
-      "width": 2
+    "row_2": {
+      "tab": {
+        "hp": "KeyTab",
+        "leds": [68,69,70,71]
+      },
+      "q": {
+        "hp": "KeyQ",
+        "leds": [72]
+      },
+      "w": {
+        "hp": "KeyW",
+        "leds": [73]
+      },
+      "e": {
+        "hp": "KeyE",
+        "leds": [74]
+      },
+      "r": {
+        "hp": "KeyR",
+        "leds": [75]
+      },
+      "t": {
+        "hp": "KeyT",
+        "leds": [76]
+      },
+      "y": {
+        "hp": "KeyY",
+        "leds": [77]
+      },
+      "u": {
+        "hp": "KeyU",
+        "leds": [78]
+      },
+      "i": {
+        "hp": "KeyI",
+        "leds": [79]
+      },
+      "o": {
+        "hp": "KeyO",
+        "leds": [80]
+      },
+      "p": {
+        "hp": "KeyP",
+        "leds": [81,175]
+      },
+      "l_bracket": {
+        "hp": "KeyBracketsL",
+        "leds": [82,83]
+      },
+      "r_bracket": {
+        "hp": "KeyBracketsR",
+        "leds": [84,85]
+      },
+      "backslash": {
+        "hp": "KeyBackslash",
+        "leds": [86,87]
+      }
     },
-    "f3": {
-      "offset": 8,
-      "width": 2
+    "row_3": {
+      "caps_lock": {
+        "hp": "KeyCaps",
+        "leds": [95,96,97,98,99]
+      },
+      "a": {
+        "hp": "KeyA",
+        "leds": [100]
+      },
+      "s": {
+        "hp": "KeyS",
+        "leds": [101]
+      },
+      "d": {
+        "hp": "KeyD",
+        "leds": [102]
+      },
+      "f": {
+        "hp": "KeyF",
+        "leds": [103]
+      },
+      "g": {
+        "hp": "KeyG",
+        "leds": [104]
+      },
+      "h": {
+        "hp": "KeyH",
+        "leds": [105]
+      },
+      "j": {
+        "hp": "KeyJ",
+        "leds": [106]
+      },
+      "k": {
+        "hp": "KeyK",
+        "leds": [107]
+      },
+      "l": {
+        "hp": "KeyL",
+        "leds": [108]
+      },
+      "semicolon": {
+        "hp": "KeyColon",
+        "leds": [109,110]
+      },
+      "quote": {
+        "hp": "KeyQuote",
+        "leds": [111,112]
+      },
+      "enter": {
+        "hp": "KeyEnter",
+        "leds": [113,114,115,116,117]
+      }
     },
-    "f4": {
-      "offset": 10,
-      "width": 2
+    "row_4": {
+      "l_shift": {
+        "hp": "KeyShiftL",
+        "leds": [121,122,123,124,125,126,127]
+      },
+      "z": {
+        "hp": "KeyZ",
+        "leds": [128]
+      },
+      "x": {
+        "hp": "KeyX",
+        "leds": [129]
+      },
+      "c": {
+        "hp": "KeyC",
+        "leds": [130]
+      },
+      "v": {
+        "hp": "KeyV",
+        "leds": [131]
+      },
+      "b": {
+        "hp": "KeyB",
+        "leds": [132]
+      },
+      "n": {
+        "hp": "KeyN",
+        "leds": [133]
+      },
+      "m": {
+        "hp": "KeyM",
+        "leds": [134]
+      },
+      "comma": {
+        "hp": "KeyComma",
+        "leds": [135,136]
+      },
+      "dot": {
+        "hp": "KeyDot",
+        "leds": [137,138]
+      },
+      "slash": {
+        "hp": "KeySlash",
+        "leds": [139,140]
+      },
+      "r_shift": {
+        "hp": "KeyShiftR",
+        "leds": [141,142,143,144,145,146]
+      }
     },
-    "f5": {
-      "offset": 12,
-      "width": 2
+    "row_5": {
+      "l_ctrl": {
+        "hp": "KeyCtrlL",
+        "leds": [154]
+      },
+      "fn": {
+        "hp": "KeyFNL",
+        "leds": [155]
+      },
+      "l_win": {
+        "hp": "KeyWin",
+        "leds": [156]
+      },
+      "l_alt": {
+        "hp": "KeyAltL",
+        "leds": [157]
+      },
+      "space": {
+        "hp": "KeySpace",
+        "leds": [158,159,160,161,162]
+      },
+      "r_alt": {
+        "hp": "KeyAltR",
+        "leds": [163]
+      },
+      "copilot": {
+        "hp": "KeyCopliot",
+        "leds": [164]
+      }
     },
-    "f6": {
-      "offset": 14,
-      "width": 2
+    "navigation": {
+      "left": {
+        "hp": "KeyArrLeft",
+        "leds": [165]
+      },
+      "up": {
+        "hp": "KeyArrUP",
+        "leds": [166,167]
+      },
+      "down": {
+        "hp": "KeyArrDown",
+        "leds": [168,169]
+      },
+      "right": {
+        "hp": "KeyArrRight",
+        "leds": [170]
+      }
     },
-    "f7": {
-      "offset": 16,
-      "width": 2
+    "numpad": {
+      "num_lock": {
+        "hp": "KeyNumPad",
+        "leds": [64]
+      },
+      "num_slash": {
+        "hp": "KeyNumSlash",
+        "leds": [65]
+      },
+      "num_star": {
+        "hp": "KeyNumStar",
+        "leds": [66]
+      },
+      "num_minus": {
+        "hp": "KeyNumDash",
+        "leds": [67]
+      },
+      "num_7": {
+        "hp": "KeyNum7",
+        "leds": [88]
+      },
+      "num_8": {
+        "hp": "KeyNum8",
+        "leds": [89]
+      },
+      "num_9": {
+        "hp": "KeyNum9",
+        "leds": [90]
+      },
+      "num_plus": {
+        "hp": "KeyNumPlus",
+        "leds": [91,92,93,94]
+      },
+      "num_4": {
+        "hp": "KeyNum4",
+        "leds": [118]
+      },
+      "num_5": {
+        "hp": "KeyNum5",
+        "leds": [119]
+      },
+      "num_6": {
+        "hp": "KeyNum6",
+        "leds": [120]
+      },
+      "num_1": {
+        "hp": "KeyNum1",
+        "leds": [147]
+      },
+      "num_2": {
+        "hp": "KeyNum2",
+        "leds": [148]
+      },
+      "num_3": {
+        "hp": "KeyNum3",
+        "leds": [149]
+      },
+      "num_enter": {
+        "hp": "KeyNumEnter",
+        "leds": [150,151,152,153]
+      },
+      "num_0": {
+        "hp": "KeyNum0",
+        "leds": [171,172,173]
+      },
+      "num_dot": {
+        "hp": "KeyNumDel",
+        "leds": [174]
+      }
     },
-    "f8": {
-      "offset": 18,
-      "width": 2
-    },
-    "f9": {
-      "offset": 20,
-      "width": 2
-    },
-    "f10": {
-      "offset": 22,
-      "width": 2
-    },
-    "f11": {
-      "offset": 24,
-      "width": 2
-    },
-    "f12": {
-      "offset": 26,
-      "width": 2
-    },
-    "delete": {
-      "offset": 28,
-      "width": 2
+    "special": {
+      "omen": {
+        "hp": "KeyOmen",
+        "leds": [28]
+      },
+      "calculator": {
+        "hp": "KeyCalc",
+        "leds": [29]
+      },
+      "settings": {
+        "hp": "KeySetting",
+        "leds": [30]
+      },
+      "power": {
+        "hp": "KeyPower",
+        "leds": [31]
+      }
     }
   },
-  "row_1": {
-    "tilde": {
-      "offset": 34,
-      "width": 2
-    },
-    "1": {
-      "offset": 36,
-      "width": 2
-    },
-    "2": {
-      "offset": 38,
-      "width": 2
-    },
-    "3": {
-      "offset": 40,
-      "width": 2
-    },
-    "4": {
-      "offset": 42,
-      "width": 2
-    },
-    "5": {
-      "offset": 44,
-      "width": 2
-    },
-    "6": {
-      "offset": 46,
-      "width": 2
-    },
-    "7": {
-      "offset": 48,
-      "width": 2
-    },
-    "8": {
-      "offset": 50,
-      "width": 2
-    },
-    "9": {
-      "offset": 52,
-      "width": 2
-    },
-    "0": {
-      "offset": 54,
-      "width": 2
-    },
-    "minus": {
-      "offset": 56,
-      "width": 2
-    },
-    "equal": {
-      "offset": 58,
-      "width": 2
-    },
-    "backspace": {
-      "offset": 60,
-      "width": 8
-    }
-  },
-  "row_2": {
-    "tab": {
-      "offset": 72,
-      "width": 4
-    },
-    "q": {
-      "offset": 76,
-      "width": 1
-    },
-    "w": {
-      "offset": 77,
-      "width": 1
-    },
-    "e": {
-      "offset": 78,
-      "width": 1
-    },
-    "r": {
-      "offset": 79,
-      "width": 1
-    },
-    "t": {
-      "offset": 80,
-      "width": 1
-    },
-    "y": {
-      "offset": 81,
-      "width": 1
-    },
-    "u": {
-      "offset": 82,
-      "width": 1
-    },
-    "i": {
-      "offset": 83,
-      "width": 1
-    },
-    "o": {
-      "offset": 84,
-      "width": 1
-    },
-    "p": {
-      "offset": 85,
-      "width": 1
-    },
-    "l_bracket": {
-      "offset": 86,
-      "width": 2
-    },
-    "r_bracket": {
-      "offset": 88,
-      "width": 2
-    },
-    "backslash": {
-      "offset": 90,
-      "width": 2
-    }
-  },
-  "row_3": {
-    "caps_lock": {
-      "offset": 99,
-      "width": 5
-    },
-    "a": {
-      "offset": 104,
-      "width": 1
-    },
-    "s": {
-      "offset": 105,
-      "width": 1
-    },
-    "d": {
-      "offset": 106,
-      "width": 1
-    },
-    "f": {
-      "offset": 107,
-      "width": 1
-    },
-    "g": {
-      "offset": 108,
-      "width": 1
-    },
-    "h": {
-      "offset": 109,
-      "width": 1
-    },
-    "j": {
-      "offset": 110,
-      "width": 1
-    },
-    "k": {
-      "offset": 111,
-      "width": 1
-    },
-    "l": {
-      "offset": 112,
-      "width": 1
-    },
-    "semicolon": {
-      "offset": 113,
-      "width": 2
-    },
-    "quote": {
-      "offset": 115,
-      "width": 2
-    },
-    "enter": {
-      "offset": 117,
-      "width": 5
-    }
-  },
-  "row_4": {
-    "l_shift": {
-      "offset": 127,
-      "width": 7
-    },
-    "z": {
-      "offset": 134,
-      "width": 1
-    },
-    "x": {
-      "offset": 135,
-      "width": 1
-    },
-    "c": {
-      "offset": 136,
-      "width": 1
-    },
-    "v": {
-      "offset": 137,
-      "width": 1
-    },
-    "b": {
-      "offset": 138,
-      "width": 1
-    },
-    "n": {
-      "offset": 139,
-      "width": 1
-    },
-    "m": {
-      "offset": 140,
-      "width": 1
-    },
-    "comma": {
-      "offset": 141,
-      "width": 2
-    },
-    "dot": {
-      "offset": 143,
-      "width": 2
-    },
-    "slash": {
-      "offset": 145,
-      "width": 2
-    },
-    "r_shift": {
-      "offset": 147,
-      "width": 6
-    }
-  },
-  "row_5": {
-    "l_ctrl": {
-      "offset": 160,
-      "width": 1
-    },
-    "fn": {
-      "offset": 161,
-      "width": 1
-    },
-    "l_win": {
-      "offset": 162,
-      "width": 1
-    },
-    "l_alt": {
-      "offset": 163,
-      "width": 1
-    },
-    "space": {
-      "offset": 164,
-      "width": 5
-    },
-    "r_alt": {
-      "offset": 169,
-      "width": 1
-    },
-    "r_ctrl": {
-      "offset": 170,
-      "width": 1
-    }
-  },
-  "navigation": {
-    "left": {
-      "offset": 171,
-      "width": 1
-    },
-    "up": {
-      "offset": 172,
-      "width": 2
-    },
-    "down": {
-      "offset": 174,
-      "width": 2
-    },
-    "right": {
-      "offset": 176,
-      "width": 1
-    }
-  },
-  "numpad": {
-    "num_lock": {
-      "offset": 68,
-      "width": 1
-    },
-    "num_slash": {
-      "offset": 69,
-      "width": 1
-    },
-    "num_star": {
-      "offset": 70,
-      "width": 1
-    },
-    "num_minus": {
-      "offset": 71,
-      "width": 1
-    },
-    "num_7": {
-      "offset": 92,
-      "width": 1
-    },
-    "num_8": {
-      "offset": 93,
-      "width": 1
-    },
-    "num_9": {
-      "offset": 94,
-      "width": 1
-    },
-    "num_plus": {
-      "offset": 95,
-      "width": 4
-    },
-    "num_4": {
-      "offset": 122,
-      "width": 1
-    },
-    "num_5": {
-      "offset": 123,
-      "width": 1
-    },
-    "num_6": {
-      "offset": 126,
-      "width": 1
-    },
-    "num_1": {
-      "offset": 153,
-      "width": 1
-    },
-    "num_2": {
-      "offset": 154,
-      "width": 1
-    },
-    "num_3": {
-      "offset": 155,
-      "width": 1
-    },
-    "num_enter": {
-      "offset": 156,
-      "width": 4
-    },
-    "num_0": {
-      "offset": 177,
-      "width": 3
-    },
-    "num_dot": {
-      "offset": 180,
-      "width": 1
-    }
-  },
-  "special": {
-    "omen": {
-      "offset": 30,
-      "width": 1
-    },
-    "calculator": {
-      "offset": 31,
-      "width": 1
-    },
-    "settings": {
-      "offset": 32,
-      "width": 1
-    },
-    "power": {
-      "offset": 33,
-      "width": 1
-    },
-    "p_icon": {
-      "offset": 181,
-      "width": 1
-    }
+  "aliases": {
+    "r_ctrl": "copilot",
+    "p_icon": "p"
   }
 }

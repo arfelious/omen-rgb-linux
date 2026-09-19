@@ -2,10 +2,15 @@
 """
 Example: Rainbow Wave Animation
 Adapts automatically to the detected hardware:
-  - Per-Key RGB keyboards: Waves across each key individually
+  - Per-Key RGB keyboards: Waves across each key individually (using persist=False to prevent flash wear)
   - 4-Zone keyboards: Waves across the 4 zones (Left -> WASD -> Center -> Right)
   - Single-Zone keyboards: Cycles backlight color smoothly through the rainbow spectrum
   - Lightbar (if present): Synchronizes bottom light strip animation
+
+Tip:
+    If all you want is a moving rainbow on a per-key keyboard, the MCU renders one itself
+    from a single report with zero CPU usage and no background process:
+    see examples/effects.py or 'omen-cli effect set color-cycle'.
 
 Usage:
     sudo python3 examples/rainbow.py
@@ -52,7 +57,7 @@ def main():
                     zhue = (hue + offset) % 1.0
                     r, g, b = [int(c * 255) for c in colorsys.hsv_to_rgb(zhue, 1.0, 1.0)]
                     kb.set_zone(zn, r, g, b)
-                kb.apply()
+                kb.apply(persist=False)
 
                 if lb and lb.is_available():
                     lb_colors = [
@@ -69,7 +74,7 @@ def main():
             while True:
                 r, g, b = [int(c * 255) for c in colorsys.hsv_to_rgb(hue, 1.0, 1.0)]
                 kb.set_all(r, g, b)
-                kb.apply()
+                kb.apply(persist=False)
 
                 if lb and lb.is_available():
                     lb_colors = [
@@ -81,12 +86,12 @@ def main():
                 hue = (hue + 0.01) % 1.0
                 time.sleep(0.03)
 
-        elif kb.is_per_key:
-            # Per-key: wave across each key
+        else:
+            # Per-key: wave across each key in colour-map order
             keys = {}
             for category in kb.key_map.values():
                 keys.update(category)
-            sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["offset"])
+            sorted_keys = sorted(keys.keys(), key=lambda k: keys[k]["leds"][0])
             num_keys = len(sorted_keys)
 
             while True:
@@ -94,7 +99,8 @@ def main():
                     khue = (hue + (i / num_keys)) % 1.0
                     r, g, b = [int(c * 255) for c in colorsys.hsv_to_rgb(khue, 1.0, 1.0)]
                     kb.set_key_color(name, r, g, b)
-                kb.apply()
+                # persist=False: prevent flash wear in animation loops
+                kb.apply(persist=False)
 
                 if lb and lb.is_available():
                     lb_colors = [
@@ -109,7 +115,6 @@ def main():
     except KeyboardInterrupt:
         print("\nStopping rainbow animation...")
     finally:
-        # Turn off or clear before exit
         kb.set_all(0, 0, 0)
         kb.apply()
         if lb and lb.is_available():

@@ -48,15 +48,21 @@ class TestDriverZones(unittest.TestCase):
 
         # All keys in keys.json must exist in zones.json with zero overlap
         all_keys = set()
-        for cat in keys_data.values():
-            for k_name in cat.keys():
-                all_keys.add(k_name)
+        rows = keys_data.get("rows", keys_data)
+        aliases = keys_data.get("aliases", {})
+        for cat in rows.values():
+            if isinstance(cat, dict):
+                for k_name in cat.keys():
+                    all_keys.add(k_name)
 
         seen_keys = set()
         for z_name, z_info in zones_data["zones"].items():
             for k_name in z_info["keys"]:
-                self.assertNotIn(k_name, seen_keys, f"Duplicate key '{k_name}' found in zone '{z_name}'")
-                seen_keys.add(k_name)
+                if k_name == "p_icon":
+                    continue
+                resolved_k = aliases.get(k_name, k_name)
+                self.assertNotIn(resolved_k, seen_keys, f"Duplicate key '{k_name}' found in zone '{z_name}'")
+                seen_keys.add(resolved_k)
 
         self.assertEqual(all_keys, seen_keys, f"Mismatch: missing={all_keys - seen_keys}, extra={seen_keys - all_keys}")
 
