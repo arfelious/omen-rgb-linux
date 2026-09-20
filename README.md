@@ -21,7 +21,13 @@ The wire protocol is documented in detail in [docs/PROTOCOL.md](docs/PROTOCOL.md
 
 - **Per-Key Keyboards (`0d62:54bf`)**: Work directly out of the box with standard `hidapi` (run with `sudo` or configure a `udev` rule).
 - **4-Zone & Single-Zone Keyboards**: Require the custom `hp-wmi` kernel driver with multicolor LED support, available from the [omen-fan-control](https://github.com/arfelious/omen-fan-control) project.
-- **Lightbar**: Supported through `hp-wmi` from the [omen-fan-control](https://github.com/arfelious/omen-fan-control) project or via`/proc/acpi/call` (requires `acpi_call-dkms`).
+- **Bottom Lightbar**:
+  - **Static Zone Lighting**: Supported through `hp-wmi` multicolor LED class nodes (`/sys/class/leds/hp::lightbar-*`) from the [omen-fan-control](https://github.com/arfelious/omen-fan-control) project.
+  - **Hardware Animations**: Lightbar onboard animations (9 built-in effects) run directly via BIOS ACPI WMI calls, requiring the `acpi_call` kernel module (`/proc/acpi/call`):
+    - **Debian / Ubuntu**: `sudo apt install acpi-call-dkms && sudo modprobe acpi_call`
+    - **Arch Linux**: `sudo pacman -S acpi_call-dkms && sudo modprobe acpi_call`
+    - **Fedora**: `sudo dnf install akmod-acpi_call && sudo modprobe acpi_call`
+
 
 ---
 
@@ -200,7 +206,7 @@ rm -rf ~/.config/omen-rgb-linux
 - **Per-Key RGB**: Tested and verified on **HP OMEN MAX 16** (boards `8D87` and `8D41`). Includes 48 derived layouts across 92 motherboard models.
 - **4-Zone RGB**: Fully supported via `hp-wmi` multicolor LED subsystem nodes (`hp::kbd_zoned_backlight-*`).
 - **Single-Zone RGB**: Fully supported via `hp-wmi` multicolor LED subsystem nodes (`hp::kbd_backlight`).
-- **Bottom Lightbar**: Supported via `hp-wmi` (`hp::lightbar-*`) or `/proc/acpi/call`.
+- **Bottom Lightbar**: Supported via `hp-wmi` (`hp::lightbar-*`) for static control, and `/proc/acpi/call` for hardware animations.
 
 Pull requests, hardware captures, and layout verifications are welcome!
 

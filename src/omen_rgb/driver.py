@@ -589,8 +589,6 @@ class OmenKeyboard:
                             self.channels[0x05][offset + i] = r
                             self.channels[0x06][offset + i] = g
                             self.channels[0x07][offset + i] = b
-                        if key_name == "p" and "p_icon" in self.keys():
-                            self.set_key_color("p_icon", r, g, b)
                         return True
 
             leds = self.key_leds(key_name)

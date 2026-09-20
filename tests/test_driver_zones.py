@@ -259,23 +259,6 @@ class TestCli4Zone(unittest.TestCase):
             self.assertEqual(f.read().strip(), "4 5 6")
         with open(os.path.join(self.leds_dir, "hp::kbd_zoned_backlight-left", "multi_intensity")) as f:
             self.assertEqual(f.read().strip(), "7 8 9")
-    def test_p_icon_hid_linking(self):
-        """Verify that setting 'p' in HID per-key mode links to 'p_icon' (offset 181)."""
-        kb = OmenKeyboard.__new__(OmenKeyboard)
-        kb.key_map = {
-            "row_2": {"p": {"offset": 85, "width": 1}},
-            "special": {"p_icon": {"offset": 181, "width": 1}}
-        }
-        kb.backend = "hid_perkey"
-        kb.channels = {0x05: bytearray(186), 0x06: bytearray(186), 0x07: bytearray(186)}
-        kb.set_key_color("p", 255, 128, 64)
-        self.assertEqual(kb.channels[0x05][85], 255)
-        self.assertEqual(kb.channels[0x06][85], 128)
-        self.assertEqual(kb.channels[0x07][85], 64)
-        self.assertEqual(kb.channels[0x05][181], 255)
-        self.assertEqual(kb.channels[0x06][181], 128)
-        self.assertEqual(kb.channels[0x07][181], 64)
-
     def test_init_hid_compatibility(self):
         """Verify _init_hid initializes with both hidapi (hid.device) and hid (hid.Device)."""
         from unittest.mock import MagicMock
@@ -308,7 +291,7 @@ class TestCli4Zone(unittest.TestCase):
         gui.state_lock = threading.Lock()
         gui.selected_keys = {"p"}
         gui.lightbar_keys = []
-        gui.key_items = {"p": (1, 2)}  # Only 'p', not split into p_icon
+        gui.key_items = {"p": (1, 2)}
         gui.has_lightbar = False
         gui.session_state = {"p": (0, 0, 0)}
         gui.rainbow_thread = None
@@ -318,8 +301,7 @@ class TestCli4Zone(unittest.TestCase):
 
         kb = OmenKeyboard.__new__(OmenKeyboard)
         kb.key_map = {
-            "row_2": {"p": {"offset": 85, "width": 1}},
-            "special": {"p_icon": {"offset": 181, "width": 1}}
+            "row_2": {"p": {"leds": [81, 175]}}
         }
         kb.backend = "hid_perkey"
         kb.channels = {0x05: bytearray(186), 0x06: bytearray(186), 0x07: bytearray(186)}
@@ -328,8 +310,9 @@ class TestCli4Zone(unittest.TestCase):
         gui.apply_custom_color(200, 100, 50)
         self.assertEqual(gui.session_state["p"], (200, 100, 50))
         self.assertNotIn("p_icon", gui.session_state)
-        self.assertEqual(kb.channels[0x05][85], 200)
-        self.assertEqual(kb.channels[0x05][181], 200)
+        # Position 81 -> page 1 offset 87, position 175 -> page 2 offset 185
+        self.assertEqual(kb.channels[0x05][kb._offset(81)], 200)
+        self.assertEqual(kb.channels[0x05][kb._offset(175)], 200)
 
     def test_animation_dialog_static_and_effects(self):
         """Verify AnimationDialog contains Static, MCU effects, and Lightbar animations."""

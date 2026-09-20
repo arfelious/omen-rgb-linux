@@ -12,6 +12,8 @@ import struct
 SYSFS_LEDS_BASE = "/sys/class/leds"
 LED_NAME_PREFIX = "hp::lightbar-"
 DEFAULT_NUM_ZONES = 4
+ACPI_CALL_PATH = "/proc/acpi/call"
+
 
 # The bar's nine device-side animations, selected by payload byte [1] of command 131081.
 LB_ANIMATIONS = {
@@ -206,17 +208,24 @@ class OmenLightbar:
     def _write_acpi(self, hex_arg):
         acpi_cmd = f"{self.acpi_path} 0 3 {hex_arg}"
         try:
-            with open("/proc/acpi/call", "w") as f:
+            with open(ACPI_CALL_PATH, "w") as f:
                 f.write(acpi_cmd)
-            with open("/proc/acpi/call", "r") as f:
+            with open(ACPI_CALL_PATH, "r") as f:
                 response = f.read().strip()
             if self._is_success_response(response):
                 return True
             raise RuntimeError(f"BIOS ACPI call failed. Response: {response}")
         except PermissionError:
-            raise PermissionError("Permission denied when writing to /proc/acpi/call. Please run as root (sudo).")
+            raise PermissionError(f"Permission denied when writing to {ACPI_CALL_PATH}. Please run as root (sudo).")
         except FileNotFoundError:
-            raise RuntimeError("acpi_call module missing (/proc/acpi/call not found).")
+            raise RuntimeError(
+                f"acpi_call module missing ({ACPI_CALL_PATH} not found).\n"
+                "Lightbar hardware animations require the acpi_call kernel module.\n"
+                "Install it with:\n"
+                "  Ubuntu/Debian: sudo apt install acpi-call-dkms && sudo modprobe acpi_call\n"
+                "  Arch Linux:    sudo pacman -S acpi_call-dkms && sudo modprobe acpi_call\n"
+                "  Fedora:        sudo dnf install akmod-acpi_call && sudo modprobe acpi_call"
+            )
 
     @staticmethod
     def _pack_config(speed="medium", direction="left", theme="galaxy"):
