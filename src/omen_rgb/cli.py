@@ -84,8 +84,22 @@ def parse_color_list(args_list, expected_count=None):
     return colors
 
 
+def _get_config_dir():
+    new_dir = os.path.expanduser("~/.config/omen-rgb")
+    old_dir = os.path.expanduser("~/.config/omen-rgb-linux")
+    if os.path.exists(new_dir):
+        return new_dir
+    if os.path.exists(old_dir):
+        try:
+            os.replace(old_dir, new_dir)
+            return new_dir
+        except OSError:
+            return old_dir
+    return new_dir
+
+
 def _get_state_file_path():
-    config_dir = os.path.expanduser("~/.config/omen-rgb-linux")
+    config_dir = _get_config_dir()
     os.makedirs(config_dir, exist_ok=True)
     return os.path.join(config_dir, "state.json")
 
@@ -415,7 +429,7 @@ def cmd_effect(kb, args):
 
 
 def _get_profiles_dir():
-    config_dir = os.path.expanduser("~/.config/omen-rgb-linux/profiles")
+    config_dir = os.path.join(_get_config_dir(), "profiles")
     if os.path.exists(config_dir):
         return config_dir
     repo_p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiles")

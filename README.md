@@ -8,8 +8,7 @@ A high-fidelity lighting controller for **HP Omen 4-Zone RGB keyboards**, **HP V
   - **4-Zone & Single-Zone**: Native Linux Multicolor LED subsystem (`/sys/class/leds/hp::kbd_zoned_backlight-*`, `hp::kbd_backlight`) via `hp-wmi`.
   - **Bottom Lightbar**: 4-zone addressable light strip via Linux Multicolor LED class nodes and direct ACPI WMI commands.
 - **Hardware Effect Engine**: For per-key keyboards, select any of the keyboard MCU's twelve built-in animations and the lightbar's nine animations.
-- **48 Keyboard Layouts Across 92 Boards**: Automatically detects motherboard DMI names (`/sys/class/dmi/id/board_name`) to select precise physical LED maps derived from OMEN Gaming Hub binaries.
-- **LampArray Recovery**: Includes `unstick` command to recover keyboards locked into autonomous mode by Windows Dynamic Lighting.
+- **48 Keyboard Layouts Across 92 Boards**: Automatically detects motherboard DMI names to select precise physical LED maps.
 - **CLI & GUI**: Terminal CLI tool and responsive Tkinter GUI.
 - **Python SDK**: Complete API for custom scripts and profiles (see [examples/](examples/)).
 
@@ -24,9 +23,19 @@ The wire protocol is documented in detail in [docs/PROTOCOL.md](docs/PROTOCOL.md
 - **Bottom Lightbar**:
   - **Static Zone Lighting**: Supported through `hp-wmi` multicolor LED class nodes (`/sys/class/leds/hp::lightbar-*`) from the [omen-fan-control](https://github.com/arfelious/omen-fan-control) project.
   - **Hardware Animations**: Lightbar onboard animations (9 built-in effects) run directly via BIOS ACPI WMI calls, requiring the `acpi_call` kernel module (`/proc/acpi/call`):
-    - **Debian / Ubuntu**: `sudo apt install acpi-call-dkms && sudo modprobe acpi_call`
-    - **Arch Linux**: `sudo pacman -S acpi_call-dkms && sudo modprobe acpi_call`
-    - **Fedora**: `sudo dnf install akmod-acpi_call && sudo modprobe acpi_call`
+    - **Debian / Ubuntu**: 
+    ```
+    sudo apt install acpi-call-dkms && sudo modprobe acpi_call
+    ```
+    - **Arch Linux**: 
+
+    ```
+    sudo pacman -S acpi_call-dkms && sudo modprobe acpi_call
+    ```
+    - **Fedora**: 
+    ```
+    sudo dnf install akmod-acpi_call && sudo modprobe acpi_call
+    ```
 
 
 ---
@@ -69,7 +78,6 @@ sudo omen-rgb status
 
 # Control all devices (keyboard + lightbar if supported)
 sudo omen-rgb all static '#ff9900'
-sudo omen-rgb all profile my_preset
 sudo omen-rgb all off
 sudo omen-rgb all rainbow
 
@@ -80,25 +88,28 @@ sudo omen-rgb profile my_preset
 # Static colors (accepts hex or RGB components)
 sudo omen-rgb static '#ff9900'
 sudo omen-rgb static 255 153 0
-sudo omen-rgb set-key esc '#ff0000'
 sudo omen-rgb off
+
+# See list of configurable keys for per-key keyboards 
+sudo omen-rgb keys
+# Set a specific key
+sudo omen-rgb set-key esc '#ff0000'
 
 # 4-Zone Keyboard commands (zones: wasd, left, center, right)
 sudo omen-rgb zone wasd '#ff0000'
 sudo omen-rgb zones '#0099ff' '#7a00ff' '#ff3300' '#ffb700'
 
-# Per-LED addressing — light individual LEDs on multi-LED keys
-sudo omen-rgb set-led 1 '#ff0000'
+# Per-LED addressing, you can see led ids via omen-rgb keys
+sudo omen-rgb set-led 174 '#ff0000'
 
 # Keyboard layouts and catalogue inspection
 sudo omen-rgb layouts
-sudo omen-rgb keys
 sudo omen-rgb --layout Starmade/German static '#ff9900'
 
 # Clear Windows Dynamic Lighting LampArray lockups
 sudo omen-rgb unstick
 
-# Hardware-rendered keyboard effects (no host CPU usage)
+# Hardware-rendered keyboard effects for per-key devices
 sudo omen-rgb effect list
 sudo omen-rgb effect set ghosting
 sudo omen-rgb effect set wave '#faac0f' '#0ffa36' --speed fast --direction left-to-right
@@ -121,20 +132,20 @@ sudo omen-rgb lightbar animation wave --theme ocean --speed fast
 sudo omen-rgb lightbar animation swipe --theme custom '#ff0000' '#0000ff'
 ```
 
-### Hardware effects vs. `rainbow`
+> **Note on White Color:** Asking the lightbar for `#FFFFFF` triggers a firmware bug where it substitutes `#FEA3DA` (visibly purple). The driver automatically rewrites `#FFFFFF` to `#FFFFFE` to bypass this bug.
+### Hardware effects vs. `rainbow` demo
 - `rainbow` is software-rendered: sends reports every frame continuously, stopping when you kill the command.
-- `effect set color-cycle` asks the MCU for the same animation in a single packet; it renders directly in hardware with 0% CPU and keeps running after the terminal is closed.
-
-> **Note on White Color:** Asking the lightbar for `#FFFFFF` triggers a firmware bug where it substitutes `#FEA3DA` (visibly purple). The driver automatically rewrites `#FFFFFF` to `#FFFFFE` (pure white) to bypass this bug.
-
+- `effect set color-cycle` asks the MCU for a similar animation in a single packet; it renders directly in hardware with no CPU usage and keeps running after the program is closed.
 ---
 
 ## Graphical Interface (GUI)
 Launch the graphical interface:
 ```bash
 sudo omen-rgb-gui
+
 # Or from source:
 sudo python3 scripts/omen_gui.py
+sudo uv run omen-rgb-gui
 ```
 
 |<img width="500" alt="Omen RGB Keyboard Controller GUI" src="https://github.com/user-attachments/assets/0731ca40-34a7-4b62-bdc9-6a62cfdcbb00" />|
@@ -197,7 +208,11 @@ sudo rm -f /usr/local/bin/omen-rgb*
 
 ### Clean configuration and profiles (Optional):
 ```bash
-rm -rf ~/.config/omen-rgb-linux
+# If commands were run with sudo (sudo writes to root's config directory):
+sudo rm -rf /root/.config/omen-rgb /root/.config/omen-rgb-linux
+
+# If run as a regular user (via udev rule or GUI):
+rm -rf ~/.config/omen-rgb ~/.config/omen-rgb-linux
 ```
 
 ---
@@ -208,7 +223,11 @@ rm -rf ~/.config/omen-rgb-linux
 - **Single-Zone RGB**: Fully supported via `hp-wmi` multicolor LED subsystem nodes (`hp::kbd_backlight`).
 - **Bottom Lightbar**: Supported via `hp-wmi` (`hp::lightbar-*`) for static control, and `/proc/acpi/call` for hardware animations.
 
-Pull requests, hardware captures, and layout verifications are welcome!
+
+## Contribution
+Pull requests, hardware captures, layout verifications, and notifying about tested hardwares are welcome!
+
+We need testers for both new and some of the existing functionality. If you'd like to test, feel free to mail `arfelious@proton.me`
 
 ---
 

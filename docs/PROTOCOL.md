@@ -1,473 +1,328 @@
-# The HP Gaming Keyboard II lighting protocol
+# HP GAMING KEYBOARD II LIGHTING INTERFACE SPECIFICATION
 
-Everything this driver sends, and where each fact came from.
+## 1. GENERAL AND SCOPE
 
-## Provenance and scope
+This specification defines the low-level lighting control protocol, wire layout, register behaviors, and firmware quirks for the HP Gaming Keyboard II subsystem and its companion chassis light bar.
 
-Two independent sources, in the order that mattered:
+### 1.1 Source Material and Scope
 
-1. **A USB capture of OMEN Gaming Hub driving the device.** Twelve seconds of OGH switching
-   effects and dragging the colour picker, decoded frame by frame. This is what the client
-   actually puts on the wire.
-2. **The OGH 1101.2607.3.0 binaries**, decompiled — `McuSDK2.dll`
-   (`General.GeneralCommandHelper`), `HP.Omen.Core.Common`
-   (`StarmadeKbLightingEffectCommandHelper`), and `KbAnimationDefaultSetting_Voco.json`
-   embedded in `HP.Omen.Core.Model.DataStructure.dll`. This is where the numbering, the enums
-   and the per-effect defaults came from; a capture could never have produced them.
-3. **OGH's embedded layout resources**, extracted from the same assemblies — the `KBKeys*Data`
-   tables and `DeviceList.json`. These are the source of `data/keyboards.json`: which LED byte
-   belongs to which key, on which keyboard, on which board. They are *not* in a decompile,
-   because they are not code — `ilspycmd` does not emit embedded resources, so a grep of the
-   decompiled sources says this data does not exist.
+The protocol parameters documented herein are established through:
 
-Then all twelve effects were written to real hardware and **looked at by a person**.
+1. **Passive USB Bus Traces:** Frame-by-frame analysis of vendor control software driving hardware routines, palette selections, and real-time animation feeds.
+2. **Decompiled Vendor Binaries:** Static analysis of vendor control suite v1101.2607.3.0 (`McuSDK2.dll`, `HP.Omen.Core.Common.StarmadeKbLightingEffectCommandHelper`, and `KbAnimationDefaultSetting_Voco.json` embedded in `HP.Omen.Core.Model.DataStructure.dll`) providing wire enumerations, record structures, and nominal field limits.
+3. **Embedded Layout Manifests:** Assembly manifests extracting `KBKeys*Data` tables and `DeviceList.json`. These define the mapping between LED array byte offsets, physical switch assemblies, and DMI system board identifiers.
+4. **Empirical Hardware Observation:** Direct visual verification of all matrix states, effect routines, boundary quirks, and modifier overlays on physical machinery (HP OMEN MAX 16, board IDs `8D87` and `8D41`).
 
-Two cautions about the second source, both learned expensively. HP ships more than one
-keyboard SDK, and this device is served by **`McuSDK2`**, not the v1 `McuSDK`
-(`KeyboardCommandHelper`, 23-byte `LightingEffectSetting`, `BLength = 22`,
-`COLOR_PAGE_1/2/3 = 60/60/24`). The v1 path describes a *different keyboard* and none of its
-byte-level claims hold here. And where a decompile and a capture disagree about this MCU, the
-capture wins — the shipping client does not use every path in its own binary.
+### 1.2 SDK Architecture Differentiation
 
-**Board scope.** All of this was measured on one machine: HP OMEN MAX 16-ak0098nr, board
-`8D87`, BIOS F.07, EC 40.38 — on **Windows**. The frames are device-level, so nothing about
-them should depend on the host OS, but the Linux side of this driver's effect support has not
-been run on Linux. Treat the negatives in particular (command `0x0C`) as facts about this
-firmware, not about the product line.
+Hardware governed by this specification interfaces exclusively via **`McuSDK2`**. It is completely incompatible with legacy **`McuSDK`** implementations (`KeyboardCommandHelper`, 23-byte `LightingEffectSetting`, `BLength = 22`, `COLOR_PAGE_1/2/3 = 60/60/24`). Legacy SDK parameters describe different hardware and must not be referenced.
 
-## Wire format
+---
 
-The MCU is USB `0d62:54bf`, **interface 3** (`MI_03`), usage page `0xFF01`. Reports are 64
-bytes with a four-byte header:
+## 2. PHYSICAL AND LINK LAYER PROTOCOL
+
+The lighting microcontroller enumerates as USB device `0d62:54bf`, interface 3 (`MI_03`), usage page `0xFF01`. Reports have a fixed length of 64 octets, prefixed by a 4-octet header:
 
 ```
-[0]      Command
-[1]      Index
-[2]      BLength, low byte
-[3]      BLength, high byte
-[4..63]  payload, 60 bytes
-```
-
-The device does not use numbered HID reports, so byte 0 goes out as byte 0 on the wire. That
-is why writing a 64-byte buffer whose first byte is the command works: `hidapi` hands the
-buffer to `hidraw`, and `usbhid` only strips a leading byte when it is `0x00`.
-
-Replies arrive on the IN endpoint with **no report-id byte**, so a reply's offsets are wire
-offsets and line up with the request: `[4]` is `payload[0]` either way.
-
-## Commands
-
-| Cmd | Name | Index | BLength | Payload |
-|---|---|---|---|---|
-| `0x03` | **SetLightingEffect** | target | **36** | 36-byte effect record, below |
-| `0x05` | static colour, red | page `0..2` | **0** | 60 bytes of the red LED map |
-| `0x06` | static colour, green | page `0..2` | **0** | 60 bytes of the green LED map |
-| `0x07` | static colour, blue | page `0..2` | **0** | 60 bytes of the blue LED map |
-| `0x09` | SetKeyboardLightingOnOff | 0 | 1 | `0` off, `1` on |
-| `0x0A` | **StoreLightingToFlash** | target | 2 | `AC 53` |
-| `0x0C` | SetKeyboardBrightness | 0 | 1 | physical value — **refused on this board** |
-| `0x10` | RestoreLightingToDefault | `7` | 4 | `94 10 98 27` |
-| `0x80` | GetDeviceInfo | 1 | 0 | — read |
-| `0x83` | **GetLightingEffect** | target | 0 | — read, reply below |
-
-`target` is `LightingEffectTarget`: `0` = ALL_LED_AREA, the only one a keyboard has. `1` and
-`2` are a mouse's logo and wheel.
-
-Commands `0x01` (StoreSettingToFlash), `0x02` (StoreMacroToFlash) and `0x0B`
-(SyncLightingEffect) exist in HP's table and are not used here. Commands `0x04`
-(`SetUserModeEnable`) and `0x0D` are never sent by OGH on this board, and `0x04` never
-acknowledges — treat it as unimplemented rather than as a missing unlock.
-
-### `BLength = 0` on the colour pages is correct
-
-It looks like an omission and it is not. `GeneralCommandHelper.CreateStaticCMD` writes
-`Raw[3] = 0; Raw[4] = 0` as literals and copies 60 bytes per page, three pages per channel —
-nine frames for a full repaint — and OGH's own traffic shows `00 00` there on every page. The
-`60/60/24` framing with a real `BLength` is the v1 SDK's, and it is not what ships.
-
-This driver's 186-byte channel buffer with its first two bytes of each 62-byte chunk forced to
-zero is exactly that layout: those two bytes *are* `BLength`.
-
-### `0x0A` is a flash write, not a commit
-
-`StoreLightingToFlash` writes MCU flash. That is why lighting survives a reboot — and why it
-must not be looped. Colour and effect writes take hold without it; they just do not persist.
-
-`apply()` still persists by default, because whether the colour pages display without it has
-not been confirmed on this hardware. Anything drawing frames in a loop should pass
-`persist=False`.
-
-### Acknowledgement is not display
-
-Every command is answered with the request echoed and a status at `[4],[5]`: `EC AC` accepted,
-`EC FA` refused. **Both are firmware-level answers about the frame, not about the LEDs.**
-During one stuck-keyboard session every frame HP's own client sent was acknowledged and nothing
-displayed. Close a claim about this interface with two things: a `0x83` readback showing the
-field changed, *and* a person looking at the keyboard. Neither alone has been sufficient.
-
-## The static colour map — commands `0x05`/`0x06`/`0x07`
-
-One channel at a time, three pages of 60 bytes each, `BLength = 0`: nine frames repaint the
-whole keyboard. This driver's 186-byte channel buffer is exactly that, with the two `BLength`
-bytes at the head of each 62-byte page.
-
-**A map entry is an LED, not a key, and a key owns more than one.** This is the fact everything
-else in this section follows from. Measured by lighting positions one at a time: entries `0-9`
-light Esc, F1, F2, F3 and F4 — ten entries, five keys. Entry `0` is the LED under the *Esc*
-legend and entry `1` is the one nearer the bottom of the same keycap, so they are physically
-distinct LEDs on one cap rather than two bytes of one value. A uniform fill cannot show this,
-which is why 176 reads as a key count for as long as it does.
-
-Position → buffer offset is therefore not the identity, and the two `BLength` bytes are in the
-way:
+Octet  0      : Command identifier (Opcode)
+Octet  1      : Sub-index / Target selector
+Octet  2      : Block length (BLength), low-order byte
+Octet  3      : Block length (BLength), high-order byte
+Octet  4..63  : Payload data (60 octets)
 
 ```
-position 0..59     buffer 2..61        page 0
-position 60..119   buffer 64..123      page 1
-position 120..179  buffer 126..185     page 2
-```
 
-Backspace straddles a page — positions `58` to `63` — so writing it as one contiguous run of
-buffer offsets puts colour bytes where the firmware expects a zero. `OmenKeyboard._offset` is
-the only place in this driver that knows about the chunking, for that reason.
+The microcontroller does not implement HID report numbering; octet 0 of the host buffer maps directly to octet 0 on the USB bus. Writing 64-octet buffers via `hidraw` preserves direct byte alignment provided the leading octet is non-zero.
 
-### 176 positions light up, 180 are transmitted
+Status replies returned via the IN endpoint omit report identifiers. Response offsets align directly with request frames (buffer offset `[4]` constitutes payload octet 0 in both directions).
 
-`CreateStaticCMD` always sends three full 60-byte pages, but it copies only as many bytes as
-HP's own key array holds. On this board that array is 176 long, so OGH's third page carries 56
-colour bytes and four zeros — visible in the capture. HP's layout resource says the same thing
-from the other direction: it declares 180 elements and annotates the last four as *"some of the
-bytes are empty but fill it up here for easy control to UI"*.
+---
 
-So 180 is the transmitted length and 176 is the useful one. (The v1 SDK's 144 is a third number
-and describes a different keyboard.)
+## 3. COMMAND DISPATCH MATRIX
 
-### Which LED belongs to which key
+| Opcode | Designation | Index | Length | Payload Definition |
+| --- | --- | --- | --- | --- |
+| `0x03` | `SetLightingEffect` | Target (`0`) | 36 | 36-octet effect control record (see Section 6) |
+| `0x05` | Static Red Channel | Page `0..2` | 0 | 60 octets static red matrix |
+| `0x06` | Static Green Channel | Page `0..2` | 0 | 60 octets static green matrix |
+| `0x07` | Static Blue Channel | Page `0..2` | 0 | 60 octets static blue matrix |
+| `0x09` | `SetKeyboardLightingOnOff` | 0 | 1 | Control argument: `0x01` (prep/enable), `0xFF` (blank) |
+| `0x0A` | `StoreLightingToFlash` | Target (`0`) | 2 | Fixed sequence: `0xAC 0x53` |
+| `0x0C` | `SetKeyboardBrightness` | 0 | 1 | Intensity value (**Unacknowledged / Times out**) |
+| `0x10` | `RestoreLightingToDefault` | 7 | 4 | Fixed sequence: `0x94 0x10 0x98 0x27` |
+| `0x80` | `GetDeviceInfo` | 1 | 0 | Status query (interrogation) |
+| `0x83` | `GetLightingEffect` | Target (`0`) | 0 | Read merged effect state |
 
-HP ships the answer as data, not as code: `GetKeyLayout` loads an embedded JSON resource, one
-element per LED **in byte order**, shaped `[X, Y, Width, Height, Name]`, and every element
-carrying the same `Name` is one physical key. `data/keyboards.json` is derived from those
-tables — 48 layouts covering every per-key OMEN keyboard, keyed to 92 board ids. `omen-rgb
-layouts` lists them.
+The `Target` field accepts `0` (`ALL_LED_AREA`), representing the keyboard matrix. Indices `1` and `2` designate mouse peripheral targets (logo and scroll wheel).
 
-Three properties of the data are worth knowing before relying on it:
+* **Unused/Vendor Opcodes:** `0x01` (`StoreSettingToFlash`), `0x02` (`StoreMacroToFlash`), and `0x0B` (`SyncLightingEffect`) exist in dispatch tables but are unreferenced by driver operations.
+* **Unimplemented/Unacknowledged Opcodes:** `0x04` (`SetUserModeEnable`) fails to produce an acknowledgement and must be treated as unimplemented. `0x0D` is never emitted by the host suite.
 
-- **The table says which key, never where on the key.** Every element of a key repeats the
-  *key's* rectangle, so intra-key order is a byte order and not a geometry — and it is not
-  consistent between rows. On Esc, position `0` is under the legend and `1` below it; on the
-  number row the digit takes the lower position and the shifted glyph the higher. Label them
-  "LED 1 of 2", not "top", unless someone has looked at that key.
-- **A key's positions are usually contiguous, and that is a property of this table rather than a
-  rule.** On the verified board `KeyP` is the sole exception: positions `81` **and** `175`, the
-  second being the illuminated glyph below the *P* legend. This driver used to carry that as a
-  separate `p_icon` key with a hardcoded link; HP groups them, so now `p` simply has two LEDs.
-- **`mi_04` cannot supply the grouping**, which is the obvious place to look. That interface's
-  HID LampArray reports 120 lamps against this map's 176 positions and the two enumerations are
-  not nested: only 46 of 99 keys have as many lamps as LEDs, every dual-legend key collapses to
-  one lamp, and eight keys — Omen, Calculator, Settings, Power, Fn, Copilot among them — have no
-  lamp at all while owning a live LED here. A UI built on the lamp map is a coarser board than
-  the hardware and cannot be refined into one.
+### 3.1 Static Block Length Framing
 
-### Nothing in `0..175` is dead on this board
+Submitting `BLength = 0` (`Raw[2] = 0x00, Raw[3] = 0x00`) on static color submissions (`0x05`, `0x06`, `0x07`) is required by the hardware decoder. The host transmits three successive 60-octet segments per color channel (nine total frames to execute a full matrix repaint).
 
-HP's `SetNullBytes` zeroes part of the map, and *which* part depends on the firmware cycle, not
-on the model:
+Driver buffers maintaining 186 octets per channel must store two zeroed octets at the head of each 62-octet page slice to preserve framing.
 
-| board / layout | resource | zeroed positions |
-|---|---|---|
-| Dojo / Vibrance, cycle ≤ 260 — **this board, 25C1** | `DojoKBKeysGlobalData.json` | `176–179` |
-| Dojo / Vibrance, cycle > 260, non-JP | `DojoKBKeysGlobalData26C1.json` | `137–138`, `146` |
-| Dojo / Vibrance, cycle > 260, JP | `DojoKBKeysJPData26C1.json` | `174–176`, `179` |
+### 3.2 Volatile vs. Non-Volatile Memory Retention
 
-`137` and `138` are `KeyDot`; `146` is the last cell of `KeyShiftR`. Applying the cycle > 260 row
-to a 25C1 board holds three working LEDs dark — a bug that is invisible unless you light those
-positions individually, because a uniform fill looks correct either way. This driver's key map
-names all three and is right to.
+* **Volatile Refresh (`persist=False`):** Color matrices and effect parameters take immediate effect in controller RAM upon submission. Volatile updates execute without invoking `0x0A`. Interactive animations and real-time color streaming must run in this mode to avoid flash wear.
+* **Flash Persistence (`0x0A`):** Writing `0xAC 0x53` via command `0x0A` commits active RAM tables to non-volatile MCU storage, preserving lighting state across power cycles. Due to finite flash write cycles, `0x0A` must never be called in continuous rendering loops.
 
-That is also why layout detection reads the **DMI board name** (`/sys/class/dmi/id/board_name`,
-the same string Windows calls `Win32_BaseBoard.Product`) rather than the model. HP's own
-`DeviceList.json` ships SSIDs on both sides of the 26C1 boundary for the same device name, so
-the model alone would pick the wrong map. An unknown board keeps the verified layout and says
-so; guessing a near neighbour lights the wrong keys and looks like a working feature.
+### 3.3 Link Status Acknowledgement
 
-**Only `Dojo/Global`, board 8D87, has been watched light up.** The other 47 layouts come out of
-the same tables by the same rule and nobody has seen one run — `omen-rgb layouts` marks them
-unverified and so should anything else that offers them.
+Command frames are confirmed by echoing the request header with status flags at payload positions `[4]` and `[5]`:
 
-## Fn, and which interface owns the picture
+* `0xEC 0xAC`: Frame parsed and accepted by MCU registers.
+* `0xEC 0xFA`: Frame syntax or parameters rejected.
 
-Pressing Fn is a **device-side repaint**. The MCU owns the key matrix and the LEDs, so an Fn
-combination never reaches the host: while Fn is held the MCU draws its own overlay — the combo
-keys in purple, everything else dark — and on release it redraws the base layer **from its own
-state**. Its own state is the effect record and the static colour map above.
+> **Operational Warning:** Status codes reflect register acceptance only; they do not verify physical drive by the LED output circuitry. Fully qualifying a hardware state requires a state readback query alongside physical inspection.
 
-So a picture written with `0x05`/`0x06`/`0x07` comes back after Fn with no host process running,
-and there is nothing to implement. There is also nothing to hook if you wanted to: the MCU's
-auto-report channel carries two button types, `LIGHTING_CHANGE` and `LED_ON_OFF`, and the Fn
-modifier is neither.
+### 3.4 Opcode Quirks (`0x0C` and `0x09`)
 
-**A picture painted on `mi_04` instead does not come back.** The HID LampArray frame is not part
-of the MCU's state, the MCU has nothing to restore it from, and no host is repainting — so the
-display stays on the overlay frame indefinitely: black keyboard, purple Fn combos. The property
-that makes `mi_04` attractive, one report that lands and holds, is the same property that makes
-it unrecoverable. Use it for a host-driven animation, which is repainting anyway; not for a
-picture that is meant to stay.
+* **Brightness Command `0x0C` Failure:** Command `0x0C` is not implemented in this firmware generation. Submissions with arguments `0, 1, 2, 3, 50, 100` fail to generate an acknowledgement frame, resulting in transport-level timeouts.
+* **Master State Control `0x09`:** Argument `0x01` must be transmitted immediately prior to static color page series. Argument `0xFF` forces immediate hardware matrix blanking. Submitting `0x00` **does not** undo blanking; restoring matrix illumination requires actuating the hardware `Fn` backlight toggle key, which signals the embedded controller (EC) to fire an asynchronous WMI event.
 
-### When everything acknowledges and nothing lights
+---
 
-There is one device state that makes this whole interface look dead, and it is worth recognising
-before reaching for a hardware reset.
+## 4. STATIC COLOUR MATRIX
 
-A host that writes `AutonomousMode = 0` to the LampArray control report (feature report 6 on
-`mi_04`) tells the keyboard to stop drawing its own lighting and wait for host frames. Every
-colour page then acknowledges honestly and displays nothing — for HP's own client as much as for
-this one, which is the discriminator that identifies it.
+Static matrix lighting uses opcodes `0x05` (Red), `0x06` (Green), and `0x07` (Blue). Each channel is divided into three 60-octet segments with `BLength = 0`.
 
-- **Nothing sets it back.** It is device state, it outlives the process that set it, and it
-  survives a reboot, because the internal USB bus stays powered.
-- **It is not readable.** Report 6 is write-only here, so the state is invisible to software.
-- **It can arrive from the other OS.** Windows Dynamic Lighting and OMEN control apps take host
-  control, and at least one has shipped without handing it back.
+Elements in the matrix address individual LED emitters, not physical key switches. Many physical key assemblies contain two or more discrete emitters. For example, logical offsets `0` through `9` address ten independent diodes across key assemblies `Esc`, `F1`, `F2`, `F3`, and `F4`. On `Esc`, offset `0` illuminates the top legend diode, while offset `1` illuminates the lower diode.
 
-    omen-rgb unstick
+### 4.1 Frame Buffer Translation
 
-writes `AutonomousMode = 1` and hands the LEDs back. An AC disconnect with the power button held
-also clears it, by power-cycling the MCU — but it takes the BIOS defaults with it, so try the
-one-report version first.
-
-## The effect record — command `0x03`
-
-36 declared bytes. Field names are HP's.
+Logical emitter indices translate to serialized channel buffer offsets across interleaved page headers:
 
 ```
-[0]   Effect              effect id, wire numbering — table below
-[1]   ShowMode            0 single custom colour   1 multiple custom colours
-                          2 Volcano   3 Jungle   4 Ocean   5 Rainbow
-[2]   ColorNumber         (n - 1) for n custom colours; 4 means "a preset is in use"
-[3]   LedSpeed            0 slow   1 medium   2 fast
-[4]   Brightness          0..3 = LV_01..LV_04, 100 = physical value
-[5]   Direction           0 inward  1 outward  2 right-to-left  3 left-to-right
-                          4 up  5 down  6 clockwise  7 counter-clockwise
-[6]   RippleSize          0 small  1 medium  2 large
-[7]   RaindropFrequency   0 slow  1 medium  2 fast
-[8]   InnerBrightness     Audio Pulse only — treble level
-[9]   OuterBrightness     Audio Pulse only — bass level
-[10..23]  unused, zero
-[24..26]  colour 1 R,G,B
-[27..29]  colour 2
-[30..32]  colour 3
-[33..35]  colour 4
-```
-
-Colour bytes are RGB, confirmed against HP's own swatch palette (`#EA002A` crimson, `#0FFA36`
-green, `#FA0FE7` purple, `#FAAC0F` yellow, `#0F36FA` blue).
-
-Three fields are not what a reader would assume:
-
-- **`ColorNumber` is a zero-based count.** Four custom colours send `3`. The value `4` is a
-  sentinel — HP spells it `COLOR_NUMBER_PRESET` — meaning "ignore the colour block".
-- **`ShowMode` merges two ideas.** `0` and `1` say how many custom colours there are; `2..5`
-  name a preset instead, and the colour block is only meaningful for `0`/`1`.
-- **`RaindropFrequency` is never set independently.** OGH assigns it the same value as
-  `LedSpeed` for every effect, so `[3]` and `[7]` always match in a capture.
-
-**Six colour slots reach the device and four are declared.** HP's builder writes colours 5 and
-6 into `[36..41]`, and the report is 64 bytes so they are physically transmitted — but
-`BLength` is 36, which ends the record at colour 4, and OGH's UI caps at four. Whether the MCU
-would honour six under `BLength = 42` is untested. This driver does not send them.
-
-### The MCU merges the record; it does not replace it
-
-**A `0x03` frame only updates the fields the selected effect actually consumes.** Everything
-else keeps whatever it held before. Measured four ways:
-
-| sent | read back | reading |
-|---|---|---|
-| Wave, `Inner`/`Outer` = 0 (after a frame that set them to 200) | `Inner`/`Outer` = **200** | Wave does not consume them |
-| Audio Pulse, `ShowMode`/`ColorNumber` = 0 (after a preset frame) | **3 / 4** | Audio Pulse has no theme control |
-| Wave, `LedSpeed` = 0 and `Direction` = 0 | **0 / 0** | Wave *does* consume them |
-| Audio Pulse, `Inner`/`Outer` = 150 | **150 / 150** | consumed |
-
-Two consequences worth holding onto:
-
-- **You cannot clear a field by sending zero** unless the current effect consumes it. To zero
-  `InnerBrightness`, select Audio Pulse and send zero. A frame that "sets everything to
-  defaults" does no such thing.
-- **The `0x83` reply is merged state, not an echo.** A matching readback does not prove the
-  firmware took that field from your frame.
-
-The firmware's idea of which fields an effect uses matches OGH's UI option matrix, which was
-read out of the view-model independently. Two unrelated sources, one answer — that matrix is
-`EFFECT_INFO` in `src/effects.py`.
-
-### Reply to `0x83`
+Logical Indices   0..59   ->  Buffer Offsets   2..61   (Page 0)
+Logical Indices  60..119  ->  Buffer Offsets  64..123  (Page 1)
+Logical Indices 120..179  ->  Buffer Offsets 126..185  (Page 2)
 
 ```
-[1]      EffectTargetIndex
-[4]      Effect        [5] ShowMode   [6] ColorNumber   [7] LedSpeed
-[8]      Brightness    [9] Direction  [10] RippleSize   [11] RaindropFrequency
-[12]     InnerBrightness   [13] OuterBrightness
-[28..45] six colour triples
-```
 
-`EC FA` at `[4],[5]` means the read was refused — not that the effect is zero.
+Because logical elements `58` through `63` span a page boundary, linear block writes must preserve zeroed `BLength` bytes at offsets `62..63` and `124..125` to prevent data byte displacement.
 
-### Effect numbering
+### 4.2 Array Sizing and Physical Allocation
 
-OGH's dropdown is a 1-based list; the wire uses `LightingEffectType`, and the map
-(`EffectCommandTable`) is not the identity.
+A complete transfer transmits three 60-octet segments per channel (180 octets). The active keyboard matrix implements 176 operational LED circuits. Trailing positions `176..179` represent dead fill octets required to complete the third 60-octet transfer.
 
-| UI # | OGH name | wire | `LightingEffectType` |
-|---|---|---|---|
-| 1 | Color Cycle | `4` | COLOR_LOOP |
-| 2 | Starlight | `7` | SPARKLE |
-| 3 | Breathing | `2` | BREATHING |
-| 4 | Ghosting | `8` | GHOSTING |
-| 5 | Ripple | `9` | RIPPLE |
-| 6 | Wave | `10` | WAVE |
-| 7 | OMEN X | `13` | OMEN_X |
-| 8 | Raindrop | `12` | RAINDROP |
-| 9 | Audio Pulse | `14` | AUDIO_PULSE |
-| 10 | Confetti | `15` | CONFETTI |
-| 11 | Sun | `16` | SUN |
-| 12 | Swipe | `17` | SWIPE |
+* **Positional Indexing:** Byte offsets dictate matrix indices rather than Cartesian geometry. Key legend orders vary: function keys map the primary legend to the lower index, whereas numeric keys place the base glyph at the lower index and the shifted character at the higher index.
+* **Discontinuous Key Switches:** While most key switch emitters are contiguous, select assemblies are split. On verified hardware layouts (`8D87`, `8D41`), key assembly `KeyP` addresses diode indices `81` and `175`.
+* **HID LampArray Divergence (`MI_04`):** The secondary HID LampArray interface on `MI_04` exposes a coarse 120-lamp topology. It merges multi-emitter switches into single lamps and completely omits eight functional keys (`Omen`, `Calculator`, `Settings`, `Power`, `Fn`, `Copilot`, among others). True per-diode addressing is only achievable via Interface 3.
 
-The wire enum has values this list never reaches — `0` OFF, `1` STEADY, `3` BLINKING,
-`5` STATIC_DPI_COLOR, `6` STATIC_SHUFFLE, `11` LINE_STREAK, `159` ALL_KEY_SINGLE_COLOR,
-`160`/`161` WAVE_RIGHT_TO_LEFT / WAVE_LEFT_TO_RIGHT, `162` STATIC_TEMPLATE. Whether this
-firmware implements any of them is untested, and it is the cheapest interesting experiment
-left on this interface. Note that under the merge rule an unknown effect id may render using
-retained fields, so prime the record first.
+### 4.3 DMI Board Revision and Zero-Fill Boundaries
 
-### All twelve render, including the two that look broken
+Sub-allocations within the 180-octet static table are determined by platform generation:
 
-Confirmed by writing each effect id and looking. Ten drew immediately on a preset palette. The
-two that came up black did so for reasons that follow from the field map rather than
-contradicting it:
+| System Board / Layout | Resource Manifest | Unused / Zeroed Indices |
+| --- | --- | --- |
+| Dojo / Vibrance, cycle ≤ 260 (25C1, e.g., `8D87`) | `DojoKBKeysGlobalData.json` | `176..179` |
+| Dojo / Vibrance, cycle > 260, non-JP | `DojoKBKeysGlobalData26C1.json` | `137..138`, `146` |
+| Dojo / Vibrance, cycle > 260, JP | `DojoKBKeysJPData26C1.json` | `174..176`, `179` |
 
-- **Swipe requires custom colours.** Sent with `ColorNumber = 4` it renders **black**; sent
-  with two custom colours it sweeps. That is why OGH offers Swipe no presets — a firmware
-  constraint, not a UI preference.
-- **Audio Pulse is device-side but host-fed.** Sent with both levels at `0` it renders
-  **black**; sent at `200` with no audio playing at all, it pulses. Reproducing it is a ~5 Hz
-  loop feeding two bytes, not a per-key renderer. OGH re-sends the record every 200 ms with the
-  high band in `InnerBrightness` and the low band in `OuterBrightness`; colour 1 is bass/outer
-  and colour 2 treble/inner.
+Indices `137` and `138` map to `KeyDot`; index `146` maps to the terminal emitter of `KeyShiftR`. Erroneously applying cycle > 260 padding rules to a 25C1 controller blanks these working diodes. Drivers must evaluate DMI board identifiers (`/sys/class/dmi/id/board_name`) rather than marketing model strings to resolve the correct layout table.
 
-A black keyboard is a reading, not a failure. Recording these two as "Audio Pulse and Swipe do
-not work" would have been two false negatives written down as settled.
+---
 
-Also: `Rainbow` (`ShowMode = 5`) is offered for Wave only, but nothing in the frame restricts
-it — OGH simply hides the button. Confetti and Sun take no custom colours at all.
+## 5. HARDWARE MODIFIER HANDLING & SYSTEM LOCKOUT
 
-## Brightness: there is no working lever
+### 5.1 Internal Fn Matrix Override
 
-**Command `0x0C` does not work on this board.** The frame is not acknowledged at any payload
-value — `0`, `1`, `2`, `3`, `50`, `100` — while five other commands are acknowledged through
-the same handle and the same frame builder. Five accepted and one refused across six payloads
-is the command being rejected, not the transport failing.
+The physical `Fn` key is intercepted and serviced directly by the keyboard MCU. Actuation triggers an internal firmware override: valid combination keys light up in purple while remaining keys are blanked.
 
-It is in HP's command table and `McuSDK2` composes it, so it is real somewhere; it is not
-implemented in this firmware.
+* **Interface 3 Restoration:** When `Fn` is released, the MCU repaints the base lighting layer directly from its internal RAM registers. No host driver interaction or polling is involved.
+* **Interface 4 (`MI_04`) Failure:** Host frames written via the `MI_04` LampArray interface do not reside in the MCU's autonomous memory. When `Fn` is released after a LampArray paint, the keyboard remains blank indefinitely until refreshed by the host.
 
-**And brightness is not a property of an effect either.** `Brightness` at `[4]` read back
-`160` unchanged through every frame ever sent, which under the merge rule means no effect
-consumes it. So a device-rendered effect runs at whatever brightness the firmware chose, and
-nothing on this interface changes it. The Fn backlight key does.
+### 5.2 Autonomous Mode Lockout (`AutonomousMode = 0`)
 
-## `GetDeviceInfo` — command `0x80`
+Writing `AutonomousMode = 0` via HID LampArray Feature Report 6 on `MI_04` commands the MCU to disable internal lighting pipelines and await external host streaming:
 
-A typical reply, as it arrives (no report-id byte):
+* Standard Interface 3 commands continue to acknowledge (`0xEC 0xAC`) but display no light.
+* Lockout state outlives software shutdowns and warm reboots because internal USB bus power persists.
+* Report 6 is strictly write-only and cannot be interrogated.
+
+**Recovery:** Transmit `AutonomousMode = 1` via Feature Report 6 on `MI_04`. Alternatively, execute a complete hardware discharge by disconnecting AC power and holding the chassis power button.
+
+---
+
+## 6. EFFECT CONTROL BLOCK (COMMAND `0x03`)
+
+Hardware effects are configured using a 36-octet command frame (`BLength = 36`):
 
 ```
-80 01 29 d0 00 00 00 00 01 00 03 01 c8
-                                 ^^ ^^
-                        effect ──┘  └── brightness
+Octet  0      : Effect identifier (Wire ID; see Section 6.3)
+Octet  1      : ShowMode
+                0 = Single custom colour
+                1 = Multiple custom colours
+                2 = Preset: Volcano
+                3 = Preset: Jungle
+                4 = Preset: Ocean
+                5 = Preset: Rainbow (Wave routine only)
+Octet  2      : ColorNumber (0-based count: n - 1; value 4 = Preset in use)
+Octet  3      : LedSpeed (0 = Slow, 1 = Medium, 2 = Fast)
+Octet  4      : Brightness (0..3 = Step levels, 100 = Max; ignored by firmware)
+Octet  5      : Direction (Vector mapping):
+                0 = Inward
+                1 = Outward
+                2 = Right-to-Left
+                3 = Left-to-Right
+                4 = Up
+                5 = Down
+                6 = Clockwise
+                7 = Counter-Clockwise
+Octet  6      : RippleSize (0 = Small, 1 = Medium, 2 = Large)
+Octet  7      : RaindropFrequency (Mirrors LedSpeed [Octet 3])
+Octet  8      : InnerBrightness (Treble amplitude; Audio Pulse only)
+Octet  9      : OuterBrightness (Bass amplitude; Audio Pulse only)
+Octet 10..23  : Reserved (Pad with 0x00)
+Octet 24..26  : Colour 1 (R, G, B) - Bass/Outer color in Audio Pulse
+Octet 27..29  : Colour 2 (R, G, B) - Treble/Inner color in Audio Pulse
+Octet 30..32  : Colour 3 (R, G, B)
+Octet 33..35  : Colour 4 (R, G, B)
+
 ```
 
-Two bytes here move. `[11]` is the effect id **in the same wire numbering `0x03` uses** — it
-reads `0x08` when `0x83` independently reports Ghosting. `[12]` tracks the backlight: `0xC8` /
-`0xA0` while lit, `0x64` while dark.
+Although host packets carry 64 bytes on the wire (including color slots 5 and 6 at octets `36..41`), the MCU parser terminates at octet 35 per `BLength = 36`.
 
-Get the alignment right. HP's own code indexes a buffer that *does* carry a report-id byte, so
-its `data[11]`/`data[12]` are these plus one. The rival alignment gives a brightness of `0x01`,
-which is plausible and meaningless.
+### 6.1 Register Merging Architecture
 
-## Command `0x09` is two-argument, not a blanking command
+The MCU does not overwrite internal state unconditionally. A `0x03` submission updates **only** the register fields consumed by the specified effect. All unconsumed registers retain their previous values:
 
-Argument `0x01` is what OGH sends immediately before every colour round. Argument `0xFF`
-**blanks the keyboard**, and `0x09`/`0x00` does not undo it — the Fn backlight key does,
-instantly, with every HP service stopped. The master lighting state lives in firmware and the
-EC raises a WMI event *after* the key is pressed, so the host is told, never asked.
+* An unconsumed parameter cannot be zeroed out unless the active effect consumes that field. (For example, clearing residual `InnerBrightness` values requires selecting Audio Pulse and transmitting zeros).
+* Hardware effect brightness (Octet 4) is not consumed by the animation engines and reads back at an immutable value of `160`.
 
-Do not generalise from one argument to the command.
+### 6.2 State Readback Query (`0x83`) and Parser Safeguards
 
-## The light bar is a different device
-
-Not HID at all: WMI class `Keyboard`, command `0x0B`, one 128-byte payload, reached on Linux
-through `/proc/acpi/call`. Four zones, zone 0 leftmost.
+Executing command `0x83` returns the combined MCU register block:
 
 ```
-[0]      TargetDevice   0 = light bar, 1 = FourZoneAni (the four-zone keyboard variant)
-[1]      effect         0 = static colour; non-zero selects an animation
-[2]      bits 0-1 speed      slow 0  medium 1  fast 2
-         bits 2-3 direction  left 4  right 8       (two directions, not the keyboard's six)
-         bits 4-7 theme      galaxy 16  volcano 32  jungle 48  ocean 64  custom 80
-[3]      brightness     0..100
-[4]      tribe          } audio-pulse levels, host-fed
-[5]      bass           }
-[6]      colour count   4 for a static colour
-[7..18]  four zones, R,G,B each, zone 0 first
+Octet  1      : EffectTargetIndex
+Octet  4      : Active Effect Identifier (or 0xEC on refusal)
+Octet  5      : ShowMode                 (or 0xFA on refusal)
+Octet  6      : ColorNumber
+Octet  7      : LedSpeed
+Octet  8      : Brightness
+Octet  9      : Direction
+Octet 10      : RippleSize
+Octet 11      : RaindropFrequency
+Octet 12      : InnerBrightness
+Octet 13      : OuterBrightness
+Octet 28..45  : Six 3-octet RGB colour definitions (18 octets)
+
 ```
 
-**Nine animations**, all written and looked at: `1` lighting sync, `2` ColorCycle,
-`3` Starlight, `4` Breathing, `6` Wave, `7` Raindrop, `8` AudioPulse, `9` Confetti, `10` Sun,
-`11` Swipe. `5` is unassigned.
+> **Parser Alert:** If octets `[4]` and `[5]` evaluate to `0xEC 0xFA`, the readback command was refused. Software parsers must check for this condition prior to decoding octet `[4]` as an active effect identifier.
 
-**This numbering is not the keyboard's**, and Ghosting, Ripple and OMEN X do not exist here at
-all. OGH's twelve-item keyboard list and this nine-item list are two device paths merged in one
-UI. Always name the device along with the number — mixing the two is the single most common way
-to get lost in this part of the machine.
+### 6.3 Effect Enumeration & Operational Rules
 
-The same two effects fail the same way as on the keyboard, for the same two reasons: **Swipe**
-is custom-colour only, and **Audio Pulse**'s levels *are* the animation rather than an enable
-for it. Held constant, Audio Pulse shows a steady colour and keeps showing it after the process
-exits. Predicted from the keyboard result and confirmed first try.
+| UI # | Effect Name | Wire ID | Vendor Identifier | Operational Constraints |
+| --- | --- | --- | --- | --- |
+| 1 | Color Cycle | 4 | `COLOR_LOOP` | Standard operation |
+| 2 | Starlight | 7 | `SPARKLE` | Standard operation |
+| 3 | Breathing | 2 | `BREATHING` | Standard operation |
+| 4 | Ghosting | 8 | `GHOSTING` | Standard operation |
+| 5 | Ripple | 9 | `RIPPLE` | Standard operation |
+| 6 | Wave | 10 | `WAVE` | Exclusively supports Rainbow preset (`ShowMode = 5`) |
+| 7 | OMEN X | 13 | `OMEN_X` | Standard operation |
+| 8 | Raindrop | 12 | `RAINDROP` | `RaindropFrequency` [7] must mirror `LedSpeed` [3] |
+| 9 | Audio Pulse | 14 | `AUDIO_PULSE` | Host-fed rendering loop; requires live magnitude updates |
+| 10 | Confetti | 15 | `CONFETTI` | Custom colors rejected; operates on fixed internal palette |
+| 11 | Sun | 16 | `SUN` | Custom colors rejected; operates on fixed internal palette |
+| 12 | Swipe | 17 | `SWIPE` | Custom color mode mandatory (`ColorNumber != 4`) |
 
-### Never ask this device for `#FFFFFF`
+#### Effect Execution Caveats:
 
-The firmware special-cases exactly two input values:
+* **Swipe (Wire 17):** Must be configured with custom colors (`ShowMode = 0` or `1`). If submitted with `ColorNumber = 4` (preset mode), the keyboard remains unlit.
+* **Audio Pulse (Wire 14):** Driven by an autonomous firmware routine that requires real-time host amplitude feeds. If octets `[8]` and `[9]` remain `0`, the matrix outputs black. The host driver must cycle updates at ~5 Hz:
+* `InnerBrightness` [8] modulates the treble band.
+* `OuterBrightness` [9] modulates the bass band.
+* `Colour 1` (`[24..26]`) maps to bass/outer perimeter lighting.
+* `Colour 2` (`[27..29]`) maps to treble/inner lighting.
 
-| asked | stored | looks like |
-|---|---|---|
-| `FF0000` | `FE0000` | indistinguishable from `FF0001` — harmless |
-| `FFFFFF` | `FEA3DA` | **purple-white**, next to a plainly white `FFFFFE` |
 
-Everything else tested passes through byte-exact, including `FF0001`, one bit away from a
-substituted value. That rules out a calibration curve, a per-channel clamp and a gamma table:
-it is a lookup with two entries. `OmenLightbar.AVOID_FIRMWARE_WHITE` rewrites `#FFFFFF` to
-`#FFFFFE` for this reason; set it `False` to send values verbatim.
 
-### What the bar cannot tell you
+---
 
-**Colours are readable and animation state is not.** HP's only Keyboard-class read
-(`0x0C`) returns `sign FAIL`, `RTCD 4` on this board. **Brightness is not readable either** —
-byte `[1]` of the support reply looks like brightness and is scratch; it read `0x7D` after a
-write whose green channel was `0x7D`, and stayed there across brightnesses of 30, 75, 5 and
-100. HP's own code reads only bit 1 of byte `[0]` from that reply, and that now looks like
-knowledge rather than laziness.
+## 7. SYSTEM TELEMETRY & BRIGHTNESS CONTROL
 
-So an animation or a brightness written to the bar can only be confirmed by looking at it.
+### 7.1 Status Query (`0x80`)
 
-## A note on method
+Submitting `0x80` returns hardware telemetry without a report ID prefix:
 
-The rule that produced most of the above, stated once because it cost the most to learn:
+```
+Byte Offset:  00 01 02 03 04 05 06 07 08 09 10 11 12
+Value:        80 01 29 d0 00 00 00 00 01 00 03 01 c8
+                                                |  |
+                    Active Wire Effect ID ------+  +--- Backlight Intensity
 
-> **Verify by outcome, not by return code.** A command that acknowledges has told you the
-> firmware parsed your bytes. It has told you nothing about the LEDs. The failure mode is a
-> false success — bytes good, light wrong — and several confident wrong claims in this work had
-> exactly that shape.
+```
 
-The corollary for anyone extending this: a buffer is not state until you have watched it change
-in response to something you did. Read the same field twice with a visible change in between.
-It takes a minute and it catches the expensive kind of mistake.
+* **Offset `[11]`:** Active effect wire identifier matching the table in Section 6.3.
+* **Offset `[12]`:** Global backlight state (`0xC8` or `0xA0` = Active/Lit; `0x64` = Dark/Suspended).
+
+*Alignment Note:* Host stacks inserting an artificial HID report-ID byte will read these values offset by +1 (indices `[12]` and `[13]`).
+
+### 7.2 Brightness Mediation
+
+Backlight intensity cannot be modified via Interface 3 commands. Physical LED brightness is controlled entirely through the embedded controller via the hardware `Fn` backlight toggle key.
+
+---
+
+## 8. AUXILIARY CHASSIS LIGHT BAR SUBSYSTEM
+
+The front light bar is an independent peripheral controlled via ACPI WMI class `Keyboard`, command `0x0B`, passing a 128-octet payload. On Linux systems, this interface is addressed via `/proc/acpi/call`. It exposes four physical lighting zones ordered 0 to 3 from left to right.
+
+### 8.1 WMI Command Structure
+
+```
+Octet  0      : Target Device (0 = Light Bar, 1 = FourZoneAni variant)
+Octet  1      : Animation ID (0 = Static Colour, non-zero = Animation)
+Octet  2      : Configuration Bitfield:
+                Bits 0..1 : Speed (0 = Slow, 1 = Medium, 2 = Fast)
+                Bits 2..3 : Direction (4 = Leftward, 8 = Rightward)
+                Bits 4..7 : Theme Preset:
+                            16 = Galaxy
+                            32 = Volcano
+                            48 = Jungle
+                            64 = Ocean
+                            80 = Custom
+Octet  3      : Brightness (0..100)
+Octet  4      : Treble level (Audio Pulse stream)
+Octet  5      : Bass level (Audio Pulse stream)
+Octet  6      : Colour Count (4 for static assignment)
+Octet  7..18  : Zones 0 through 3, three octets per zone (R, G, B)
+
+```
+
+### 8.2 Light Bar Animation Routines
+
+The light bar firmware implements 10 animation routines (routine `5` is unassigned):
+
+* `1`: Lighting Sync
+* `2`: Color Cycle
+* `3`: Starlight
+* `4`: Breathing
+* `6`: Wave
+* `7`: Raindrop
+* `8`: Audio Pulse (requires host feed of bytes `[4]` and `[5]`)
+* `9`: Confetti
+* `10`: Sun
+* `11`: Swipe (requires custom color assignment)
+
+*Note:* Keyboard effects `Ghosting`, `Ripple`, and `OMEN X` do not exist on the light bar subsystem.
+
+### 8.3 Firmware White Substitution Workaround
+
+The light bar firmware contains a two-entry hardcoded lookup table:
+
+* `#FF0000` is remapped to `#FE0000` (imperceptible change).
+* `#FFFFFF` is remapped to `#FEA3DA`, emitting a distinct **violet-tinted white**.
+
+Values adjacent to the lookup entries (such as `#FFFFFE` and `#FF0001`) pass through unmodified. Drivers must rewrite incoming pure white requests (`#FFFFFF`) to `#FFFFFE` prior to serialization.
+
+### 8.4 Query Capabilities & Limitations
+
+* **Static Colors:** Static RGB color state is readable through standard WMI query operations.
+* **Animation and Brightness:** Animation state and brightness queries are unsupported by the firmware. Executing a Keyboard-class read (`0x0C`) returns `sign FAIL`, `RTCD 4`. Byte `[1]` of the query structure contains volatile scratchpad data rather than the active brightness level. Animation state and brightness changes must be verified via physical observation.

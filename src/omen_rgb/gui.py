@@ -43,8 +43,22 @@ def _resolve_asset_path(filename):
     return pkg_path
 
 
+def _get_config_dir():
+    new_dir = os.path.expanduser("~/.config/omen-rgb")
+    old_dir = os.path.expanduser("~/.config/omen-rgb-linux")
+    if os.path.exists(new_dir):
+        return new_dir
+    if os.path.exists(old_dir):
+        try:
+            os.replace(old_dir, new_dir)
+            return new_dir
+        except OSError:
+            return old_dir
+    return new_dir
+
+
 def _get_profiles_dir():
-    config_dir = os.path.expanduser("~/.config/omen-rgb-linux/profiles")
+    config_dir = os.path.join(_get_config_dir(), "profiles")
     if os.path.exists(config_dir):
         return config_dir
     repo_p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiles")
@@ -305,8 +319,10 @@ class AnimationDialog(tk.Toplevel):
         self.geometry("740x580")
         self.minsize(700, 520)
         self.configure(bg="#1a1a1a")
-        self.transient(parent)
-        self.grab_set()
+        try:
+            self.grab_set()
+        except Exception:
+            pass
 
         self.update_idletasks()
         x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
@@ -837,7 +853,7 @@ class OmenGUI:
             # Simulation mode: strictly in-memory UI testing, do not write to filesystem
             return
         try:
-            config_dir = os.path.expanduser("~/.config/omen-rgb-linux")
+            config_dir = _get_config_dir()
             os.makedirs(config_dir, exist_ok=True)
             state_file = os.path.join(config_dir, "state.json")
             serializable_state = {k: list(v) for k, v in self.session_state.items()}
@@ -857,7 +873,7 @@ class OmenGUI:
     def _load_active_state(self):
         if getattr(self.kb, "is_simulation", False):
             return False
-        state_file = os.path.expanduser("~/.config/omen-rgb-linux/state.json")
+        state_file = os.path.join(_get_config_dir(), "state.json")
         if os.path.exists(state_file):
             try:
                 with open(state_file, "r") as f:
