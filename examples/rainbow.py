@@ -86,7 +86,7 @@ def main():
                 hue = (hue + 0.01) % 1.0
                 time.sleep(0.03)
 
-        else:
+        elif kb.is_per_key:
             # Per-key: wave across each key in colour-map order
             keys = {}
             for category in kb.key_map.values():

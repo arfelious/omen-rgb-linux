@@ -8,7 +8,6 @@ A high-fidelity lighting controller for **HP Omen 4-Zone RGB keyboards**, **HP V
   - **4-Zone & Single-Zone**: Native Linux Multicolor LED subsystem (`/sys/class/leds/hp::kbd_zoned_backlight-*`, `hp::kbd_backlight`) via `hp-wmi`.
   - **Bottom Lightbar**: 4-zone addressable light strip via Linux Multicolor LED class nodes and direct ACPI WMI commands.
 - **Hardware Effect Engine**: Select any of the keyboard MCU's twelve built-in animations and the lightbar's nine animations with a single report — animations run in hardware with 0% host CPU and survive process exit.
-- **Flash-Wear Safe**: Distinguishes runtime frames from flash memory commits (`apply(persist=False)`), preventing MCU flash wear during animation loops.
 - **48 Keyboard Layouts Across 92 Boards**: Automatically detects motherboard DMI names (`/sys/class/dmi/id/board_name`) to select precise physical LED maps derived from OMEN Gaming Hub binaries.
 - **LampArray Recovery**: Includes `unstick` command to recover keyboards locked into autonomous mode by Windows Dynamic Lighting.
 - **CLI & GUI**: Terminal CLI tool and responsive Tkinter GUI.
@@ -22,7 +21,7 @@ The wire protocol is documented in detail in [docs/PROTOCOL.md](docs/PROTOCOL.md
 
 - **Per-Key Keyboards (`0d62:54bf`)**: Work directly out of the box with standard `hidapi` (run with `sudo` or configure a `udev` rule).
 - **4-Zone & Single-Zone Keyboards**: Require the custom `hp-wmi` kernel driver with multicolor LED support, available from the [omen-fan-control](https://github.com/arfelious/omen-fan-control) project.
-- **Lightbar**: Supported through `hp-wmi` multicolor LED subsystem (`hp::lightbar-*`) or `/proc/acpi/call` (`acpi_call-dkms`).
+- **Lightbar**: Supported through `hp-wmi` from the [omen-fan-control](https://github.com/arfelious/omen-fan-control) project or via`/proc/acpi/call` (requires `acpi_call-dkms`).
 
 ---
 
@@ -86,7 +85,7 @@ sudo omen-rgb zones '#0099ff' '#7a00ff' '#ff3300' '#ffb700'
 sudo omen-rgb set-led 1 '#ff0000'
 
 # Keyboard layouts and catalogue inspection
-omen-rgb layouts
+sudo omen-rgb layouts
 sudo omen-rgb keys
 sudo omen-rgb --layout Starmade/German static '#ff9900'
 
@@ -94,7 +93,7 @@ sudo omen-rgb --layout Starmade/German static '#ff9900'
 sudo omen-rgb unstick
 
 # Hardware-rendered keyboard effects (no host CPU usage)
-omen-rgb effect list
+sudo omen-rgb effect list
 sudo omen-rgb effect set ghosting
 sudo omen-rgb effect set wave '#faac0f' '#0ffa36' --speed fast --direction left-to-right
 sudo omen-rgb effect set ripple --theme ocean --size large
@@ -135,14 +134,6 @@ sudo python3 scripts/omen_gui.py
 |<img width="500" alt="Omen RGB Keyboard Controller GUI" src="https://github.com/user-attachments/assets/0731ca40-34a7-4b62-bdc9-6a62cfdcbb00" />|
 |---|
 
----
-
-## Frame & Protocol Verification (No Hardware Required)
-Run the standalone frame test suite:
-```bash
-python3 tests/test_frames.py
-```
-This suite stubs `hidapi` and asserts byte-for-byte that the driver's output packets match actual Wireshark/USB captures taken from official Windows OMEN Gaming Hub sessions across all effects, palettes, and layouts.
 
 ---
 
@@ -216,4 +207,6 @@ Pull requests, hardware captures, and layout verifications are welcome!
 ---
 
 ## Disclaimer
-This project is an independent open-source initiative and is not affiliated with, endorsed by, or associated with HP (Hewlett-Packard). All product and company names are trademarks™ or registered® trademarks of their respective holders.
+
+> This software is not affiliated with, authorized, maintained, sponsored, or endorsed by HP (Hewlett-Packard) or any of its affiliates. Use this software at your own risk. The authors and contributors assume no responsibility or liability for any potential hardware damage, data loss, or system issues resulting from using this software.
+

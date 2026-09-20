@@ -323,10 +323,12 @@ class OmenLightbar:
         return self.set_colors(cur_colors, brightness=brightness)
 
     def set_static(self, r, g, b, brightness=100):
+        """Sets all lightbar zones to the same RGB color."""
         num_zones = self.get_num_zones()
         return self.set_colors([(r, g, b)] * num_zones, brightness=brightness)
 
     def turn_off(self):
+        """Turns off all lightbar zones."""
         return self.set_static(0, 0, 0, brightness=0)
 
     def get_zone_brightness(self, zone_idx):

@@ -383,9 +383,13 @@ class OmenKeyboard:
             "  sudo udevadm control --reload-rules && sudo udevadm trigger"
         )
 
-    # ----------------- Zone Controls (4-Zone / 1-Zone) -----------------
+    # ----------------- Zone Controls -----------------
 
     def set_zone(self, zone_name_or_id, r, g, b, brightness=None):
+        """
+        Sets color (and optional brightness) for a specific zone.
+        zone_name_or_id can be string ('right', 'center', 'left', 'wasd') or int (0..3).
+        """
         r = max(0, min(255, int(r)))
         g = max(0, min(255, int(g)))
         b = max(0, min(255, int(b)))
@@ -541,6 +545,7 @@ class OmenKeyboard:
 
     def key_leds(self, key_name):
         """The colour-map positions of a key."""
+        key_name = self.key_map.get("aliases", {}).get(key_name, key_name)
         for category in self.key_map.values():
             if isinstance(category, dict) and key_name in category:
                 info = category[key_name]
@@ -679,6 +684,9 @@ class OmenKeyboard:
                           bytes((0x01 if on is True else (0x00 if on is False else int(on) & 0xFF),)))
 
     def set_effect(self, setting, persist=False, target=TARGET_ALL):
+        if not self.is_per_key or self.is_simulation or not self.device:
+            return None
+
         if not isinstance(setting, fx.EffectSetting):
             setting = fx.EffectSetting(setting)
 
@@ -759,27 +767,47 @@ LAMP_CONTROL_REPORT_ID = 6
 LAMPARRAY_INTERFACE = 4
 
 
-def restore_device_lighting_control(vid=OmenKeyboard.VID, pid=OmenKeyboard.PID):
+def restore_device_lighting_control(vid=OmenKeyboard.VID, pid=OmenKeyboard.PID, return_errors=False):
     """
     Tell the keyboard to go back to drawing its own lighting: AutonomousMode = 1.
     Writes report 6 to mi_04 LampArray to clear Windows Dynamic Lighting lockups.
     """
     import hid
     written = 0
+    errors = []
     for entry in hid.enumerate(vid, pid):
         if entry.get('interface_number') not in (LAMPARRAY_INTERFACE, -1):
             continue
         if entry.get('usage_page') not in (0x59, 0, None):
             continue
+
+        device = None
+        path = entry.get('path')
         try:
-            device = hid.Device(path=entry['path'])
-        except Exception:
+            device = hid.device()
+            device.open_path(path)
+        except (AttributeError, TypeError):
+            try:
+                device = hid.Device(path=path)
+            except Exception as e:
+                errors.append((path, str(e)))
+                continue
+        except Exception as e:
+            errors.append((path, str(e)))
             continue
+
         try:
             device.send_feature_report(bytes((LAMP_CONTROL_REPORT_ID, 0x01)))
             written += 1
-        except Exception:
-            pass
+        except Exception as e:
+            errors.append((path, str(e)))
         finally:
-            device.close()
+            if device:
+                try:
+                    device.close()
+                except Exception:
+                    pass
+
+    if return_errors:
+        return written, errors
     return written

@@ -58,8 +58,6 @@ class TestDriverZones(unittest.TestCase):
         seen_keys = set()
         for z_name, z_info in zones_data["zones"].items():
             for k_name in z_info["keys"]:
-                if k_name == "p_icon":
-                    continue
                 resolved_k = aliases.get(k_name, k_name)
                 self.assertNotIn(resolved_k, seen_keys, f"Duplicate key '{k_name}' found in zone '{z_name}'")
                 seen_keys.add(resolved_k)
@@ -301,8 +299,8 @@ class TestCli4Zone(unittest.TestCase):
             kb._init_hid()
             mock_hid.Device.assert_called_with(path=b'3-9:1.3')
 
-    def test_p_gui_single_key_and_sync(self):
-        """Verify GUI treats 'p' as a single key and syncs p_icon in session_state."""
+    def test_p_gui_single_key(self):
+        """Verify GUI treats 'p' as a single key without needing p_icon in session_state."""
         from omen_rgb.gui import OmenGUI
         import threading
 
@@ -312,7 +310,7 @@ class TestCli4Zone(unittest.TestCase):
         gui.lightbar_keys = []
         gui.key_items = {"p": (1, 2)}  # Only 'p', not split into p_icon
         gui.has_lightbar = False
-        gui.session_state = {"p": (0, 0, 0), "p_icon": (0, 0, 0)}
+        gui.session_state = {"p": (0, 0, 0)}
         gui.rainbow_thread = None
         gui._schedule_hardware_write = lambda do_kb, do_lb: None
         gui._schedule_state_save = lambda: None
@@ -329,9 +327,55 @@ class TestCli4Zone(unittest.TestCase):
 
         gui.apply_custom_color(200, 100, 50)
         self.assertEqual(gui.session_state["p"], (200, 100, 50))
-        self.assertEqual(gui.session_state["p_icon"], (200, 100, 50))
+        self.assertNotIn("p_icon", gui.session_state)
         self.assertEqual(kb.channels[0x05][85], 200)
         self.assertEqual(kb.channels[0x05][181], 200)
+
+    def test_animation_dialog_static_and_effects(self):
+        """Verify AnimationDialog contains Static, MCU effects, and Lightbar animations."""
+        import tkinter as tk
+        from unittest.mock import MagicMock
+        from omen_rgb.gui import AnimationDialog
+
+        root = tk.Tk()
+        root.withdraw()
+
+        gui = MagicMock()
+        gui.kb = MagicMock()
+        gui.kb.is_per_key = True
+        gui.kb.is_simulation = False
+        gui.lb = MagicMock()
+        gui.has_lightbar = True
+        gui.rainbow_thread = None
+        gui.selected_keys = {"w", "a", "s", "d"}
+        gui.session_state = {"w": (255, 0, 0), "a": (255, 0, 0), "s": (255, 0, 0), "d": (255, 0, 0)}
+
+        dlg = AnimationDialog(root, gui)
+        self.assertTrue(len(dlg.items) > 10)
+        self.assertEqual(dlg.items[0]["id"], "static")
+
+        # 1. Apply static
+        dlg.do_apply()
+        gui._flush_hardware_writes.assert_called_with(do_kb=True, do_lb=True)
+
+        # 2. Apply MCU wave effect
+        wave_idx = [i for i, item in enumerate(dlg.items) if item["id"] == "wave"][0]
+        dlg.listbox.selection_clear(0, tk.END)
+        dlg.listbox.selection_set(wave_idx)
+        dlg.on_select(None)
+        dlg.do_apply()
+        self.assertTrue(gui.kb.set_effect.called)
+
+        # 3. Apply Lightbar wave animation
+        lb_wave_idx = [i for i, item in enumerate(dlg.items) if item["type"] == "lightbar" and item["id"] == "wave"][0]
+        dlg.listbox.selection_clear(0, tk.END)
+        dlg.listbox.selection_set(lb_wave_idx)
+        dlg.on_select(None)
+        dlg.do_apply()
+        self.assertTrue(gui.lb.set_animation.called)
+
+        dlg.destroy()
+        root.destroy()
 
     def test_simulate_4zone_flag(self):
         """Verify 4-zone simulation mode can be activated via parameter or env var."""

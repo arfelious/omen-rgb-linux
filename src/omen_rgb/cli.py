@@ -210,13 +210,18 @@ def cmd_layouts(kb, args):
 def cmd_unstick(kb, args):
     print("Writing AutonomousMode = 1 to the mi_04 LampArray control report.")
     print("This tells the keyboard to go back to drawing its own lighting.")
-    count = restore_device_lighting_control()
+    count, errors = restore_device_lighting_control(return_errors=True)
     if count:
         print(f"Accepted by {count} interface(s). Look at the keyboard - an accepted feature")
         print("report is not a lit keyboard, and report 6 cannot be read back.")
     else:
-        print("No LampArray interface accepted it. mi_04 may not be exposed, or hidraw")
-        print("permissions may be missing - see the udev rule in the README.")
+        perm_err = any("permission" in str(e).lower() for _, e in errors)
+        if perm_err:
+            print("Permission denied opening the LampArray hidraw interface.")
+            print("Please run with sudo: 'sudo omen-rgb unstick' (or install the udev rule).")
+        else:
+            print("No LampArray interface accepted it. mi_04 may not be exposed, or hidraw")
+            print("permissions may be missing - see the udev rule in the README.")
 
 def cmd_zone(kb, args):
     colors = parse_color_list(args.color, expected_count=1)
@@ -646,7 +651,7 @@ def main():
     # Set one LED. A key with two printed legends has two of them.
     p_led = subparsers.add_parser(
         "set-led", help="Set color for a single LED, by colour-map position")
-    p_led.add_argument("position", type=int, help="Colour-map position (0..175 on 8D87)")
+    p_led.add_argument("position", type=int, help="Colour-map position")
     p_led.add_argument("color", nargs="+", help="Color as hex (#ff9900) or RGB components")
 
     # Keys and keyboards

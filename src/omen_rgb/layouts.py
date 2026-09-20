@@ -21,16 +21,6 @@ is that grouping for all 48 per-key OMEN keyboards OMEN Gaming Hub supports, key
 ids; ``data/keys.json`` is the same thing for the one keyboard this project was written on,
 under friendlier names.
 
-**Only one layout has been watched light up: Dojo/Global, board 8D87.**  Every other entry is
-derived from the same HP resource by the same rule and nobody has seen it run, which is what
-``Layout.verified`` says.  Surface that flag - a keyboard that lights the wrong key is worse
-than one that admits it does not know.
-
-Detection is by DMI board name, which is the same string Windows calls
-``Win32_BaseBoard.Product``.  It has to be the board and not the model: Dojo and Vibrance each
-ship SSIDs on both sides of HP's 26C1 firmware boundary, the two firmwares blank different LED
-positions, and the model name alone would pick the wrong map.
-
 See ``docs/PROTOCOL.md`` for where the data came from.
 """
 
@@ -153,7 +143,7 @@ class Catalog:
 
 
 def board_id(path=DMI_BOARD):
-    """This machine's DMI board name, e.g. ``"8D87"``.  None if it cannot be read."""
+    """This machine's DMI board name."""
     try:
         with open(path, 'r') as handle:
             return handle.read().strip().upper() or None

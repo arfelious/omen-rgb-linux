@@ -55,8 +55,8 @@ def main():
         for key in ["up", "down", "left", "right"]:
             kb.set_key_color(key, 255, 200, 0)
 
-        # 6. Set 'P' key (automatically synchronizes both letter 'P' and the 'p_icon' LED)
-        print("Setting 'P' key to Cyan (syncs both letter and logo LED)...")
+        # 6. Set 'P' key (controls both physical LEDs: letter 'P' and secondary logo LED)
+        print("Setting 'P' key to Cyan (both letter and logo LEDs)...")
         kb.set_key_color("p", 0, 255, 255)
 
         # 7. Write changes to keyboard hardware

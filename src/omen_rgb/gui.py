@@ -3,7 +3,7 @@
 # Copyright (C) 2026 arfelious
 
 import tkinter as tk
-from tkinter import PhotoImage
+from tkinter import PhotoImage, ttk
 import sys
 import os
 import signal
@@ -19,10 +19,12 @@ sys.path.append(os.path.join(BASE_DIR, 'src'))
 
 try:
     from omen_rgb.driver import OmenKeyboard
-    from omen_rgb.lightbar import OmenLightbar
+    from omen_rgb.lightbar import OmenLightbar, LB_ANIMATIONS, LB_THEMES, LB_SPEEDS, LB_DIRECTIONS
+    from omen_rgb import effects as fx
 except ImportError:
     from driver import OmenKeyboard
-    from lightbar import OmenLightbar
+    from lightbar import OmenLightbar, LB_ANIMATIONS, LB_THEMES, LB_SPEEDS, LB_DIRECTIONS
+    import effects as fx
 
 # Variable flags for simulating control without writing to hardware or filesystem
 # Set to True, export OMEN_SIMULATE_4ZONE=1 / OMEN_SIMULATE_1ZONE=1, or run with -s / -s1
@@ -291,6 +293,406 @@ class RainbowThread(threading.Thread):
     def stop(self):
         self.running = False
 
+class AnimationDialog(tk.Toplevel):
+    def __init__(self, parent, gui):
+        super().__init__(parent)
+        self.gui = gui
+        self.kb = gui.kb
+        self.lb = getattr(gui, "lb", None)
+        self.has_lightbar = getattr(gui, "has_lightbar", False)
+
+        self.title("Lighting Animations & Modes")
+        self.geometry("740x580")
+        self.minsize(700, 520)
+        self.configure(bg="#1a1a1a")
+        self.transient(parent)
+        self.grab_set()
+
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_rooty() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+
+        # Catalog of animations
+        self.items = []
+
+        # 1. Static mode (always first)
+        self.items.append({
+            "id": "static",
+            "type": "mode",
+            "name": "Static (Canvas Colors)",
+            "badge": "STATIC MODE",
+            "desc": "Disables active animations and applies the static custom colors currently configured on the keyboard canvas.",
+        })
+
+        # 2. Software Rainbow
+        self.items.append({
+            "id": "software_rainbow",
+            "type": "software",
+            "name": "Rainbow Wave (Software)",
+            "badge": "SOFTWARE ANIMATION",
+            "desc": "Cycles smooth rainbow colors across the keyboard canvas in software via a background thread.",
+        })
+
+        # 3. Hardware MCU effects (if per-key or simulation)
+        if self.kb.is_per_key or getattr(self.kb, "is_simulation", False):
+            mcu_effects = [
+                ("wave", "Wave", "Smooth color wave sweeping across keyboard keys rendered in hardware (0% CPU).", {"presets": True, "direction": True, "speed": True}),
+                ("color-cycle", "Color Cycle", "All keys cycle in unison through the color spectrum in hardware.", {"presets": True, "speed": True}),
+                ("breathing", "Breathing", "Smooth pulsing fade in and fade out.", {"presets": True, "speed": True}),
+                ("starlight", "Starlight", "Twinkling starry night effect with individual keys sparkling randomly.", {"presets": True, "speed": True}),
+                ("ghosting", "Ghosting", "Keys leave a fading trail across the keyboard.", {"presets": True, "speed": True}),
+                ("ripple", "Ripple", "Expanding circular ripple rings radiating outward.", {"presets": True, "speed": True, "size": True}),
+                ("raindrop", "Raindrop", "Random drops of light falling across keys.", {"presets": True, "speed": True}),
+                ("omen-x", "Omen X", "HP Omen signature diagonal criss-cross beam animation.", {"presets": True, "speed": True}),
+                ("confetti", "Confetti", "Fast multi-colored sparkling bursts like falling confetti.", {"presets": True, "speed": True}),
+                ("sun", "Sun", "Warm radiant sunrise effect pulsating outward from the center.", {"presets": True, "speed": True}),
+                ("audio-pulse", "Audio Pulse", "Music/equalizer visualization with treble and bass bands.", {"levels": True}),
+                ("swipe", "Swipe", "Sharp linear directional sweep across keys (requires custom colors).", {"direction": True, "speed": True, "custom_only": True}),
+            ]
+            for fx_id, fx_name, fx_desc, fx_opts in mcu_effects:
+                self.items.append({
+                    "id": fx_id,
+                    "type": "mcu",
+                    "name": f"{fx_name} (Hardware MCU)",
+                    "badge": "HARDWARE MCU - 0% CPU",
+                    "desc": fx_desc,
+                    "opts": fx_opts,
+                })
+
+        # 4. Lightbar hardware animations
+        if self.has_lightbar and self.lb:
+            lb_anims = [
+                ("wave", "Lightbar: Wave", "Smooth traveling color wave on the front lightbar.", {"presets": True, "direction": True, "speed": True}),
+                ("breathing", "Lightbar: Breathing", "Gentle breathing pulse across the front lightbar.", {"presets": True, "speed": True}),
+                ("color_cycle", "Lightbar: Color Cycle", "Continuous smooth color cycling across the lightbar.", {"presets": True, "speed": True}),
+                ("blink", "Lightbar: Blink", "Blinking lightbar animation.", {"presets": True, "speed": True}),
+                ("swipe", "Lightbar: Swipe", "Directional swipe across lightbar zones.", {"direction": True, "speed": True}),
+                ("audio_bounce", "Lightbar: Audio Bounce", "Audio-reactive bouncing animation across lightbar zones.", {"speed": True}),
+                ("rainbow_loop", "Lightbar: Rainbow Loop", "Vibrant looping rainbow spectrum across the lightbar.", {"speed": True}),
+            ]
+            for lb_id, lb_name, lb_desc, lb_opts in lb_anims:
+                self.items.append({
+                    "id": lb_id,
+                    "type": "lightbar",
+                    "name": lb_name,
+                    "badge": "HARDWARE LIGHTBAR",
+                    "desc": lb_desc,
+                    "opts": lb_opts,
+                })
+
+        self.setup_ui()
+
+    def setup_ui(self):
+        # Header
+        hdr = tk.Frame(self, bg="#1a1a1a")
+        hdr.pack(fill="x", padx=20, pady=(15, 10))
+        tk.Label(hdr, text="LIGHTING ANIMATIONS & MODES", font=("Outfit", 15, "bold"), bg="#1a1a1a", fg="#00FFFF").pack(anchor="w")
+        tk.Label(hdr, text="Select an animation preset or choose Static to return to custom canvas colors.", font=("Outfit", 9), bg="#1a1a1a", fg="#888888").pack(anchor="w")
+
+        # Body container
+        body = tk.Frame(self, bg="#1a1a1a")
+        body.pack(fill="both", expand=True, padx=20, pady=5)
+
+        # Left Column: Listbox
+        left_f = tk.Frame(body, bg="#202020", width=270)
+        left_f.pack(side="left", fill="y", padx=(0, 10))
+        left_f.pack_propagate(False)
+
+        tk.Label(left_f, text="AVAILABLE ANIMATIONS", font=("Outfit", 9, "bold"), bg="#202020", fg="#888888", pady=6).pack(fill="x")
+
+        list_sub = tk.Frame(left_f, bg="#202020")
+        list_sub.pack(fill="both", expand=True)
+        sb = tk.Scrollbar(list_sub)
+        sb.pack(side="right", fill="y")
+
+        self.listbox = tk.Listbox(
+            list_sub,
+            font=("Outfit", 10),
+            bg="#161616",
+            fg="#E0E0E0",
+            selectbackground="#008888",
+            selectforeground="#FFFFFF",
+            relief="flat",
+            highlightthickness=0,
+            yscrollcommand=sb.set
+        )
+        self.listbox.pack(side="left", fill="both", expand=True)
+        sb.config(command=self.listbox.yview)
+
+        for item in self.items:
+            prefix = "⭐ " if item["type"] == "mode" else ("🌈 " if item["type"] == "software" else ("⚡ " if item["type"] == "mcu" else "💡 "))
+            self.listbox.insert(tk.END, f"{prefix}{item['name']}")
+
+        self.listbox.bind("<<ListboxSelect>>", self.on_select)
+
+        # Right Column: Details & Options
+        right_f = tk.Frame(body, bg="#222222")
+        right_f.pack(side="right", fill="both", expand=True)
+
+        # Info card
+        info_c = tk.Frame(right_f, bg="#262626", padx=15, pady=12)
+        info_c.pack(fill="x", padx=10, pady=10)
+
+        self.lbl_title = tk.Label(info_c, text="", font=("Outfit", 13, "bold"), bg="#262626", fg="#FFFFFF")
+        self.lbl_title.pack(anchor="w")
+        self.lbl_badge = tk.Label(info_c, text="", font=("Outfit", 8, "bold"), bg="#262626", fg="#00FFFF")
+        self.lbl_badge.pack(anchor="w", pady=(2, 6))
+        self.lbl_desc = tk.Label(info_c, text="", font=("Outfit", 9), bg="#262626", fg="#BBBBBB", wraplength=380, justify="left")
+        self.lbl_desc.pack(anchor="w")
+
+        # Config card
+        self.cfg_c = tk.Frame(right_f, bg="#262626", padx=15, pady=12)
+        self.cfg_c.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        # Dynamic option controls inside cfg_c
+        self.theme_row = tk.Frame(self.cfg_c, bg="#262626")
+        tk.Label(self.theme_row, text="Theme / Palette:", font=("Outfit", 9, "bold"), bg="#262626", fg="#AAAAAA", width=14, anchor="w").pack(side="left")
+        self.theme_var = tk.StringVar(value="rainbow")
+        self.theme_cb = ttk.Combobox(self.theme_row, textvariable=self.theme_var, values=["rainbow", "volcano", "jungle", "ocean", "custom (canvas colors)"], state="readonly", width=22)
+        self.theme_cb.pack(side="left", padx=5)
+
+        self.speed_row = tk.Frame(self.cfg_c, bg="#262626")
+        tk.Label(self.speed_row, text="Speed:", font=("Outfit", 9, "bold"), bg="#262626", fg="#AAAAAA", width=14, anchor="w").pack(side="left")
+        self.speed_var = tk.StringVar(value="medium")
+        self.speed_cb = ttk.Combobox(self.speed_row, textvariable=self.speed_var, values=["slow", "medium", "fast"], state="readonly", width=22)
+        self.speed_cb.pack(side="left", padx=5)
+
+        self.dir_row = tk.Frame(self.cfg_c, bg="#262626")
+        tk.Label(self.dir_row, text="Direction:", font=("Outfit", 9, "bold"), bg="#262626", fg="#AAAAAA", width=14, anchor="w").pack(side="left")
+        self.dir_var = tk.StringVar(value="left-to-right")
+        self.dir_cb = ttk.Combobox(self.dir_row, textvariable=self.dir_var, values=["left-to-right", "right-to-left", "inward", "outward", "up", "down", "clockwise", "counter-clockwise"], state="readonly", width=22)
+        self.dir_cb.pack(side="left", padx=5)
+
+        self.size_row = tk.Frame(self.cfg_c, bg="#262626")
+        tk.Label(self.size_row, text="Ripple Size:", font=("Outfit", 9, "bold"), bg="#262626", fg="#AAAAAA", width=14, anchor="w").pack(side="left")
+        self.size_var = tk.StringVar(value="medium")
+        self.size_cb = ttk.Combobox(self.size_row, textvariable=self.size_var, values=["small", "medium", "large"], state="readonly", width=22)
+        self.size_cb.pack(side="left", padx=5)
+
+        self.audio_row = tk.Frame(self.cfg_c, bg="#262626")
+        tk.Label(self.audio_row, text="Treble Level:", font=("Outfit", 9, "bold"), bg="#262626", fg="#AAAAAA", width=14, anchor="w").grid(row=0, column=0, sticky="w", pady=3)
+        self.treble_scale = tk.Scale(self.audio_row, from_=0, to_=255, orient="horizontal", bg="#262626", fg="#CCCCCC", highlightthickness=0, length=180)
+        self.treble_scale.set(200)
+        self.treble_scale.grid(row=0, column=1, sticky="w", padx=5)
+        tk.Label(self.audio_row, text="Bass Level:", font=("Outfit", 9, "bold"), bg="#262626", fg="#AAAAAA", width=14, anchor="w").grid(row=1, column=0, sticky="w", pady=3)
+        self.bass_scale = tk.Scale(self.audio_row, from_=0, to_=255, orient="horizontal", bg="#262626", fg="#CCCCCC", highlightthickness=0, length=180)
+        self.bass_scale.set(200)
+        self.bass_scale.grid(row=1, column=1, sticky="w", padx=5)
+
+        self.persist_row = tk.Frame(self.cfg_c, bg="#262626")
+        self.persist_var = tk.BooleanVar(value=False)
+        self.persist_chk = tk.Checkbutton(
+            self.persist_row,
+            text="Persist to MCU Flash (survives reboot)",
+            variable=self.persist_var,
+            bg="#262626",
+            fg="#DDDDDD",
+            selectcolor="#1a1a1a",
+            activebackground="#262626",
+            activeforeground="#FFFFFF",
+            font=("Outfit", 9)
+        )
+        self.persist_chk.pack(anchor="w")
+        tk.Label(self.persist_row, text="(Leave unchecked to prevent hardware flash wear)", font=("Outfit", 8), bg="#262626", fg="#888888").pack(anchor="w", padx=(22, 0))
+
+        self.mode_notice = tk.Label(self.cfg_c, text="", font=("Outfit", 9, "italic"), bg="#262626", fg="#00CCCC", wraplength=380, justify="left")
+
+        # Bottom Bar
+        btm = tk.Frame(self, bg="#1a1a1a")
+        btm.pack(fill="x", padx=20, pady=(5, 15))
+
+        self.lbl_status = tk.Label(btm, text="", font=("Outfit", 9), bg="#1a1a1a", fg="#00FF88")
+        self.lbl_status.pack(side="left")
+
+        btn_bar = tk.Frame(btm, bg="#1a1a1a")
+        btn_bar.pack(side="right")
+
+        tk.Button(
+            btn_bar,
+            text="APPLY",
+            font=("Outfit", 10, "bold"),
+            bg="#008888",
+            fg="white",
+            activebackground="#00aaaa",
+            activeforeground="white",
+            relief="flat",
+            padx=20,
+            pady=6,
+            command=self.do_apply
+        ).pack(side="left", padx=5)
+
+        tk.Button(
+            btn_bar,
+            text="CLOSE",
+            font=("Outfit", 10, "bold"),
+            bg="#333333",
+            fg="white",
+            activebackground="#444444",
+            activeforeground="white",
+            relief="flat",
+            padx=15,
+            pady=6,
+            command=self.destroy
+        ).pack(side="left", padx=5)
+
+        # Select first item by default
+        self.listbox.selection_set(0)
+        self.on_select(None)
+
+    def on_select(self, event):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        item = self.items[idx]
+
+        self.lbl_title.config(text=item["name"])
+        self.lbl_badge.config(text=item["badge"])
+        self.lbl_desc.config(text=item["desc"])
+        self.lbl_status.config(text="")
+
+        # Hide all option rows initially
+        self.theme_row.pack_forget()
+        self.speed_row.pack_forget()
+        self.dir_row.pack_forget()
+        self.size_row.pack_forget()
+        self.audio_row.pack_forget()
+        self.persist_row.pack_forget()
+        self.mode_notice.pack_forget()
+
+        itype = item["type"]
+        opts = item.get("opts", {})
+
+        if itype == "mode":
+            self.mode_notice.config(text="Click 'APPLY' to stop all animations and apply current canvas colors to all keys and lightbar.")
+            self.mode_notice.pack(fill="x", pady=10)
+        elif itype == "software":
+            self.mode_notice.config(text="Click 'APPLY' to launch the background rainbow wave thread.")
+            self.mode_notice.pack(fill="x", pady=10)
+        elif itype == "mcu":
+            if opts.get("levels"):
+                self.audio_row.pack(fill="x", pady=5)
+            else:
+                if opts.get("custom_only"):
+                    self.theme_cb.config(values=["custom (canvas colors)"])
+                    self.theme_var.set("custom (canvas colors)")
+                    self.theme_row.pack(fill="x", pady=4)
+                elif opts.get("presets"):
+                    self.theme_cb.config(values=["rainbow", "volcano", "jungle", "ocean", "custom (canvas colors)"])
+                    if self.theme_var.get() not in ["rainbow", "volcano", "jungle", "ocean", "custom (canvas colors)"]:
+                        self.theme_var.set("rainbow")
+                    self.theme_row.pack(fill="x", pady=4)
+
+                if opts.get("speed"):
+                    self.speed_row.pack(fill="x", pady=4)
+
+                if opts.get("direction"):
+                    self.dir_cb.config(values=["left-to-right", "right-to-left", "inward", "outward", "up", "down", "clockwise", "counter-clockwise"])
+                    if self.dir_var.get() not in ["left-to-right", "right-to-left", "inward", "outward", "up", "down", "clockwise", "counter-clockwise"]:
+                        self.dir_var.set("left-to-right")
+                    self.dir_row.pack(fill="x", pady=4)
+
+                if opts.get("size"):
+                    self.size_row.pack(fill="x", pady=4)
+
+            self.persist_row.pack(fill="x", pady=(8, 4))
+        elif itype == "lightbar":
+            if opts.get("presets"):
+                self.theme_cb.config(values=["galaxy", "volcano", "jungle", "ocean", "custom (canvas colors)"])
+                self.theme_var.set("galaxy")
+                self.theme_row.pack(fill="x", pady=4)
+            if opts.get("speed"):
+                self.speed_row.pack(fill="x", pady=4)
+            if opts.get("direction"):
+                self.dir_cb.config(values=["left", "right"])
+                self.dir_var.set("left")
+                self.dir_row.pack(fill="x", pady=4)
+
+    def do_apply(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        item = self.items[sel[0]]
+        itype = item["type"]
+        iid = item["id"]
+
+        if itype == "mode":
+            # Static mode
+            if self.gui.rainbow_thread:
+                self.gui.rainbow_thread.stop()
+                self.gui.rainbow_thread = None
+                self.gui.update_rainbow_button_state()
+            self.gui._flush_hardware_writes(do_kb=True, do_lb=True)
+            self.lbl_status.config(text="Static lighting applied successfully.", fg="#00FF88")
+
+        elif itype == "software":
+            # Software rainbow wave
+            if not self.gui.rainbow_thread or not self.gui.rainbow_thread.is_alive():
+                self.gui.rainbow_thread = RainbowThread(self.kb, self.gui)
+                self.gui.rainbow_thread.start()
+                self.gui.update_rainbow_button_state()
+            self.lbl_status.config(text="Software rainbow wave running.", fg="#00FF88")
+
+        elif itype == "mcu":
+            # Hardware MCU effect
+            if self.gui.rainbow_thread:
+                self.gui.rainbow_thread.stop()
+                self.gui.rainbow_thread = None
+                self.gui.update_rainbow_button_state()
+
+            theme_raw = self.theme_var.get().lower()
+            theme_choice = "single" if "custom" in theme_raw else theme_raw.split()[0]
+            custom_colors = []
+            if "custom" in theme_raw:
+                if self.gui.selected_keys:
+                    custom_colors = [self.gui.session_state[k] for k in self.gui.selected_keys if k in self.gui.session_state]
+                if not custom_colors:
+                    custom_colors = [self.gui.session_state.get(k, (255, 128, 0)) for k in ["w", "a", "s", "d"]]
+                custom_colors = custom_colors[:4]
+
+            try:
+                setting = fx.EffectSetting(
+                    iid,
+                    show_mode=theme_choice,
+                    colors=custom_colors,
+                    speed=self.speed_var.get().lower(),
+                    direction=self.dir_var.get().lower(),
+                    ripple_size=self.size_var.get().lower(),
+                    inner_brightness=int(self.treble_scale.get()),
+                    outer_brightness=int(self.bass_scale.get()),
+                )
+                persist_val = bool(self.persist_var.get())
+                self.kb.set_effect(setting, persist=persist_val)
+                p_text = " (stored to flash)" if persist_val else ""
+                self.lbl_status.config(text=f"MCU effect '{iid}' activated{p_text}.", fg="#00FF88")
+            except Exception as e:
+                self.lbl_status.config(text=f"Notice: {e}", fg="#FFA500")
+
+        elif itype == "lightbar":
+            if self.gui.rainbow_thread:
+                self.gui.rainbow_thread.stop()
+                self.gui.rainbow_thread = None
+                self.gui.update_rainbow_button_state()
+
+            theme_raw = self.theme_var.get().lower()
+            theme_choice = "custom" if "custom" in theme_raw else theme_raw.split()[0]
+            dir_choice = "left" if "left" in self.dir_var.get().lower() else "right"
+            speed_choice = self.speed_var.get().lower()
+            custom_colors = None
+            if theme_choice == "custom":
+                custom_colors = [self.gui.session_state.get(k, (255, 0, 0)) for k in self.gui.lightbar_keys]
+
+            try:
+                if self.lb:
+                    self.lb.set_animation(iid, theme=theme_choice, speed=speed_choice, direction=dir_choice, colors=custom_colors)
+                    self.lbl_status.config(text=f"Lightbar animation '{iid}' activated.", fg="#00FF88")
+                else:
+                    self.lbl_status.config(text="Lightbar not available.", fg="#FFA500")
+            except Exception as e:
+                self.lbl_status.config(text=f"Lightbar notice: {e}", fg="#FFA500")
+
+
 class ModernColorPicker(tk.Toplevel):
     def __init__(self, parent, callback):
         super().__init__(parent)
@@ -461,6 +863,8 @@ class OmenGUI:
                 with open(state_file, "r") as f:
                     loaded = json.load(f)
                 for k, v in loaded.items():
+                    if k == "p_icon":
+                        continue
                     if isinstance(v, list) and len(v) == 3:
                         self.session_state[k] = tuple(v)
                 return True
@@ -524,9 +928,6 @@ class OmenGUI:
                 for k_name in row.keys():
                     if k_name not in self.session_state:
                         self.session_state[k_name] = base_color
-
-        if "p" in self.session_state:
-            self.session_state["p_icon"] = self.session_state["p"]
 
         # Sync all keyboard key colors from session_state into self.kb driver buffer
         for k_name, color in self.session_state.items():
@@ -636,11 +1037,12 @@ class OmenGUI:
         controls = tk.Frame(self.root, bg="#1a1a1a")
         controls.pack(pady=15)
         
-        btn_s = {"font": ("Outfit", 12, "bold"), "bg": "#333333", "fg": "white", "relief": "flat", "padx": 25, "pady": 12}
-        tk.Button(controls, text="COLOR PICKER", command=lambda: ModernColorPicker(self.root, self.apply_custom_color), **btn_s).pack(side="left", padx=15)
+        btn_s = {"font": ("Outfit", 11, "bold"), "bg": "#333333", "fg": "white", "relief": "flat", "padx": 18, "pady": 10}
+        tk.Button(controls, text="COLOR PICKER", command=lambda: ModernColorPicker(self.root, self.apply_custom_color), **btn_s).pack(side="left", padx=10)
+        tk.Button(controls, text="ANIMATIONS", command=self.open_animations_dialog, **btn_s).pack(side="left", padx=10)
         self.rainbow_btn = tk.Button(controls, text="RAINBOW WAVE", command=self.toggle_rainbow, **btn_s)
-        self.rainbow_btn.pack(side="left", padx=15)
-        tk.Button(controls, text="RESET SELECTION", command=self.clear_selection, **btn_s).pack(side="left", padx=15)
+        self.rainbow_btn.pack(side="left", padx=10)
+        tk.Button(controls, text="RESET SELECTION", command=self.clear_selection, **btn_s).pack(side="left", padx=10)
         
         profile_frame = tk.Frame(self.root, bg="#1a1a1a")
         profile_frame.pack(pady=5)
@@ -648,6 +1050,9 @@ class OmenGUI:
         prof_s = {**btn_s, "bg": "#444444", "font": ("Outfit", 10, "bold")}
         tk.Button(profile_frame, text="SAVE PROFILE", command=lambda: ProfileDialog(self.root, "save", self.save_profile), **prof_s).pack(side="left", padx=10)
         tk.Button(profile_frame, text="LOAD PROFILE", command=lambda: ProfileDialog(self.root, "load", self.load_profile), **prof_s).pack(side="left", padx=10)
+
+    def open_animations_dialog(self):
+        AnimationDialog(self.root, self)
 
     def update_rainbow_button_state(self):
         if getattr(self, "rainbow_btn", None):
@@ -676,7 +1081,7 @@ class OmenGUI:
                         self.kb.apply()
                     else:
                         for k, color in self.session_state.items():
-                            if k not in self.lightbar_keys and k != "p_icon":
+                            if k not in self.lightbar_keys:
                                 self.kb.set_key_color(k, color[0], color[1], color[2])
                         self.kb.apply()
                 except Exception as e:
@@ -731,8 +1136,6 @@ class OmenGUI:
                     for k in kb_keys:
                         self.kb.set_key_color(k, r, g, b)
                         self.session_state[k] = (r, g, b)
-                    if "p" in kb_keys:
-                        self.session_state["p_icon"] = (r, g, b)
 
             # 2. Update Lightbar state if targeted
             if lb_keys and self.has_lightbar:
@@ -896,10 +1299,9 @@ class OmenGUI:
             p_dir = _get_profiles_dir()
             with open(os.path.join(p_dir, f"{name}.json"), "r") as f:
                 self.session_state = json.load(f)
-            if "p" in self.session_state:
-                self.session_state["p_icon"] = self.session_state["p"]
+            self.session_state.pop("p_icon", None)
             for k, c in self.session_state.items():
-                if k not in self.lightbar_keys and k != "p_icon":
+                if k not in self.lightbar_keys:
                     self.kb.set_key_color(k, c[0], c[1], c[2])
 
             if self.kb.is_4zone:

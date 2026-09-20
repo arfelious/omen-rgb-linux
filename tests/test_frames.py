@@ -7,7 +7,7 @@ No hardware, no dependencies, no test framework:
     python3 tests/test_frames.py
 
 The reference frames below are transcribed from a USB capture of OGH driving an
-HP Gaming Keyboard II (0d62:54bf) on an OMEN MAX 16, board 8D87. They are the only external
+HP Gaming Keyboard II (0d62:54bf) on OMEN MAX 16 devices with board ids 8D41 and 8D87. They are the only external
 authority this project has for the effect protocol, so a change that breaks one of these is a
 change that has stopped matching HP's client.
 """
