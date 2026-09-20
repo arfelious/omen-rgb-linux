@@ -1347,7 +1347,7 @@ class OmenGUI:
             self.canvas.create_text(
                 525, 120, fill="#AAAAAA", font=("Outfit", 10),
                 text=f"No key picture for layout {self.kb.layout.id if self.kb.layout else '?'}.\n"
-                     f"Use the CLI: omen-cli keys")
+                     f"Use the CLI: omen-rgb keys")
             return
 
         for row_n in ["row_0", "row_1", "row_2", "row_3", "row_4", "row_5"]:

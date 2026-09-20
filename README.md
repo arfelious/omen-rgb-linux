@@ -7,7 +7,7 @@ A high-fidelity lighting controller for **HP Omen 4-Zone RGB keyboards**, **HP V
   - **Per-Key RGB**: Direct USB HID interface (`0d62:54bf`) with per-LED addressing.
   - **4-Zone & Single-Zone**: Native Linux Multicolor LED subsystem (`/sys/class/leds/hp::kbd_zoned_backlight-*`, `hp::kbd_backlight`) via `hp-wmi`.
   - **Bottom Lightbar**: 4-zone addressable light strip via Linux Multicolor LED class nodes and direct ACPI WMI commands.
-- **Hardware Effect Engine**: Select any of the keyboard MCU's twelve built-in animations and the lightbar's nine animations with a single report — animations run in hardware with 0% host CPU and survive process exit.
+- **Hardware Effect Engine**: For per-key keyboards, select any of the keyboard MCU's twelve built-in animations and the lightbar's nine animations.
 - **48 Keyboard Layouts Across 92 Boards**: Automatically detects motherboard DMI names (`/sys/class/dmi/id/board_name`) to select precise physical LED maps derived from OMEN Gaming Hub binaries.
 - **LampArray Recovery**: Includes `unstick` command to recover keyboards locked into autonomous mode by Windows Dynamic Lighting.
 - **CLI & GUI**: Terminal CLI tool and responsive Tkinter GUI.

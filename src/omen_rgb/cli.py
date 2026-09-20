@@ -155,7 +155,7 @@ def cmd_set_key(kb, args):
 
     leds = kb.key_leds(args.key)
     if not leds:
-        print(f"Error: Key '{args.key}' is not on this keyboard. Try: omen-cli keys")
+        print(f"Error: Key '{args.key}' is not on this keyboard. Try: omen-rgb keys")
         return
     kb.set_key_color(args.key, r, g, b)
     kb.apply()

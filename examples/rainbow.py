@@ -10,7 +10,7 @@ Adapts automatically to the detected hardware:
 Tip:
     If all you want is a moving rainbow on a per-key keyboard, the MCU renders one itself
     from a single report with zero CPU usage and no background process:
-    see examples/effects.py or 'omen-cli effect set color-cycle'.
+    see examples/effects.py or 'omen-rgb effect set color-cycle'.
 
 Usage:
     sudo python3 examples/rainbow.py

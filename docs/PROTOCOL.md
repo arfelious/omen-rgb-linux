@@ -147,7 +147,7 @@ and describes a different keyboard.)
 HP ships the answer as data, not as code: `GetKeyLayout` loads an embedded JSON resource, one
 element per LED **in byte order**, shaped `[X, Y, Width, Height, Name]`, and every element
 carrying the same `Name` is one physical key. `data/keyboards.json` is derived from those
-tables — 48 layouts covering every per-key OMEN keyboard, keyed to 92 board ids. `omen-cli
+tables — 48 layouts covering every per-key OMEN keyboard, keyed to 92 board ids. `omen-rgb
 layouts` lists them.
 
 Three properties of the data are worth knowing before relying on it:
@@ -191,7 +191,7 @@ the model alone would pick the wrong map. An unknown board keeps the verified la
 so; guessing a near neighbour lights the wrong keys and looks like a working feature.
 
 **Only `Dojo/Global`, board 8D87, has been watched light up.** The other 47 layouts come out of
-the same tables by the same rule and nobody has seen one run — `omen-cli layouts` marks them
+the same tables by the same rule and nobody has seen one run — `omen-rgb layouts` marks them
 unverified and so should anything else that offers them.
 
 ## Fn, and which interface owns the picture
@@ -229,7 +229,7 @@ this one, which is the discriminator that identifies it.
 - **It can arrive from the other OS.** Windows Dynamic Lighting and OMEN control apps take host
   control, and at least one has shipped without handing it back.
 
-    omen-cli unstick
+    omen-rgb unstick
 
 writes `AutonomousMode = 1` and hands the LEDs back. An AC disconnect with the power button held
 also clears it, by power-cycling the MCU — but it takes the BIOS defaults with it, so try the

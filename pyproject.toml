@@ -13,8 +13,7 @@ dependencies = [
 [project.scripts]
 omen-rgb = "omen_rgb.cli:main"
 omen-rgb-gui = "omen_rgb.gui:main"
-omen-cli = "omen_rgb.cli:main"
-omen-gui = "omen_rgb.gui:main"
+
 
 [project.urls]
 Homepage = "https://github.com/arfelious/omen-rgb-linux"

@@ -178,7 +178,7 @@ class TestCLILightbarIntegration(unittest.TestCase):
     def test_cli_zone_command(self):
         from omen_rgb.cli import main
         import sys
-        test_args = ["omen_cli.py", "lightbar", "zone", "2", "#00ffaa", "--brightness", "90"]
+        test_args = ["omen-rgb", "lightbar", "zone", "2", "#00ffaa", "--brightness", "90"]
         with patch.object(sys, "argv", test_args):
             main()
 
@@ -189,7 +189,7 @@ class TestCLILightbarIntegration(unittest.TestCase):
     def test_cli_brightness_command(self):
         from omen_rgb.cli import main
         import sys
-        test_args = ["omen_cli.py", "lightbar", "brightness", "70"]
+        test_args = ["omen-rgb", "lightbar", "brightness", "70"]
         with patch.object(sys, "argv", test_args):
             main()
 

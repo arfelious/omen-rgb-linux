@@ -18,10 +18,6 @@ setup(
         "console_scripts": [
             "omen-rgb=omen_rgb.cli:main",
             "omen-rgb-gui=omen_rgb.gui:main",
-            "omen_cli=omen_rgb.cli:main",
-            "omen-cli=omen_rgb.cli:main",
-            "omen_gui=omen_rgb.gui:main",
-            "omen-gui=omen_rgb.gui:main",
         ],
     },
 )
