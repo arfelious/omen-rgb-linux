@@ -13,6 +13,8 @@ SYSFS_LEDS_BASE = "/sys/class/leds"
 LED_NAME_PREFIX = "hp::lightbar-"
 DEFAULT_NUM_ZONES = 4
 ACPI_CALL_PATH = "/proc/acpi/call"
+SYSFS_KEYBOARD_TYPE_FILE = "/sys/devices/platform/hp-wmi/keyboard_type"
+KEYBOARD_TYPE_PER_KEY = 3
 
 
 # The bar's nine device-side animations, selected by payload byte [1] of command 131081.
@@ -80,13 +82,34 @@ class OmenLightbar:
         return len(zones) if zones else DEFAULT_NUM_ZONES
 
     @classmethod
+    def get_keyboard_type(cls):
+        """Reads /sys/devices/platform/hp-wmi/keyboard_type (0..5) or None."""
+        if os.path.exists(SYSFS_KEYBOARD_TYPE_FILE):
+            try:
+                with open(SYSFS_KEYBOARD_TYPE_FILE, "r") as f:
+                    return int(f.read().strip())
+            except Exception:
+                pass
+        return None
+
+    @classmethod
     def _detect_backend(cls):
+        if not cls.is_supported():
+            return None
         if cls.get_zone_devices():
             return "sysfs_leds"
         return None
 
     @classmethod
     def ensure_available(cls, auto_load=True):
+        kb_type = cls.get_keyboard_type()
+        if kb_type is not None and kb_type != KEYBOARD_TYPE_PER_KEY:
+            raise RuntimeError(
+                f"Lightbar control error: Lightbar is only supported on HP OMEN laptops with "
+                f"per-key RGB keyboards (keyboard type {KEYBOARD_TYPE_PER_KEY}). "
+                f"Detected keyboard type: {kb_type}."
+            )
+
         if cls.get_zone_devices():
             return True
 
@@ -127,7 +150,12 @@ class OmenLightbar:
 
     @classmethod
     def is_supported(cls):
-        return len(cls.get_zone_devices()) > 0
+        if not cls.get_zone_devices():
+            return False
+        kb_type = cls.get_keyboard_type()
+        if kb_type is not None and kb_type != KEYBOARD_TYPE_PER_KEY:
+            return False
+        return True
 
     @staticmethod
     def _permission_error_msg(path):

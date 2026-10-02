@@ -361,6 +361,14 @@ def _describe_effect_state(state):
 
 
 def cmd_effect(kb, args):
+    if not kb or not getattr(kb, "is_per_key", False):
+        backend_name = "4-zone" if (kb and kb.is_4zone) else ("single-zone" if (kb and kb.is_single_zone) else getattr(kb, "backend", "unknown"))
+        print(
+            f"Error: Hardware MCU effects are only supported on per-key RGB keyboards (USB HID 0d62:54bf).\n"
+            f"Detected keyboard interface is '{backend_name}', which does not support hardware MCU animations."
+        )
+        sys.exit(1)
+
     if args.fx_cmd == "list":
         print("Hardware effects (rendered by the keyboard MCU, no host process required):\n")
         for name, wire in fx.EFFECTS.items():
@@ -467,6 +475,13 @@ def cmd_profile(kb, args):
 
 
 def cmd_lightbar(args):
+    if not OmenLightbar.is_supported():
+        kb_type = OmenLightbar.get_keyboard_type()
+        if kb_type is not None and kb_type != 3:
+            print(f"Error: Bottom lightbar is not supported on non-per-key laptops (keyboard type: {kb_type}).", file=sys.stderr)
+        else:
+            print("Error: Bottom lightbar is not supported or not detected on this system.", file=sys.stderr)
+        sys.exit(1)
     lb = OmenLightbar()
     brightness = getattr(args, "brightness", 100)
     updates = {}
@@ -790,9 +805,6 @@ def main():
         if args.command == "effect":
             if not args.fx_cmd:
                 p_effect.print_help()
-                return
-            if args.fx_cmd == "list":
-                cmd_effect(None, args)   # a table, not a device operation
                 return
 
         kb = OmenKeyboard(layout=args.layout, simulate_4zone=getattr(args, "simulate_4zone", False), simulate_1zone=getattr(args, "simulate_1zone", False))

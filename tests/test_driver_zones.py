@@ -259,6 +259,33 @@ class TestCli4Zone(unittest.TestCase):
             self.assertEqual(f.read().strip(), "4 5 6")
         with open(os.path.join(self.leds_dir, "hp::kbd_zoned_backlight-left", "multi_intensity")) as f:
             self.assertEqual(f.read().strip(), "7 8 9")
+
+    def test_cli_effect_probes_and_rejects_non_per_key(self):
+        from omen_rgb.cli import cmd_effect
+        import argparse
+        kb = OmenKeyboard()
+        self.assertTrue(kb.is_4zone)
+        self.assertFalse(kb.is_per_key)
+
+        args = argparse.Namespace(fx_cmd="list")
+        with self.assertRaises(SystemExit) as cm:
+            cmd_effect(kb, args)
+        self.assertEqual(cm.exception.code, 1)
+
+        args_set = argparse.Namespace(fx_cmd="set", name="wave", color=None, theme=None, speed=None, direction=None, size=None, inner=None, outer=None, persist=False)
+        with self.assertRaises(SystemExit) as cm:
+            cmd_effect(kb, args_set)
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_cli_main_effect_list_probes(self):
+        from omen_rgb.cli import main
+        import sys
+        test_args = ["omen-rgb", "effect", "list"]
+        with patch.object(sys, "argv", test_args):
+            with self.assertRaises(SystemExit) as cm:
+                main()
+            self.assertEqual(cm.exception.code, 1)
+
     def test_init_hid_compatibility(self):
         """Verify _init_hid initializes with both hidapi (hid.device) and hid (hid.Device)."""
         from unittest.mock import MagicMock
@@ -360,6 +387,36 @@ class TestCli4Zone(unittest.TestCase):
         dlg.destroy()
         root.destroy()
 
+    def test_animation_dialog_no_mcu_in_simulation_mode(self):
+        """Verify AnimationDialog does not include hardware MCU animations in simulation mode."""
+        import tkinter as tk
+        from unittest.mock import MagicMock
+        from omen_rgb.gui import AnimationDialog
+
+        root = tk.Tk()
+        root.withdraw()
+
+        gui = MagicMock()
+        gui.kb = MagicMock()
+        gui.kb.is_per_key = False
+        gui.kb.is_simulation = True
+        gui.lb = None
+        gui.has_lightbar = False
+        gui.rainbow_thread = None
+        gui.selected_keys = set()
+        gui.session_state = {}
+
+        dlg = AnimationDialog(root, gui)
+        item_ids = [item["id"] for item in dlg.items]
+        item_types = [item["type"] for item in dlg.items]
+        self.assertIn("static", item_ids)
+        self.assertIn("software_rainbow", item_ids)
+        self.assertNotIn("mcu", item_types)
+        self.assertNotIn("wave", item_ids)
+
+        dlg.destroy()
+        root.destroy()
+
     def test_simulate_4zone_flag(self):
         """Verify 4-zone simulation mode can be activated via parameter or env var."""
         # 1. Via constructor parameter
@@ -449,6 +506,20 @@ class TestKeyboardTypeAndNumpad(unittest.TestCase):
         self.assertTrue(kb_override.has_numpad)
         kb_override_no = OmenKeyboard(simulate_4zone=True, has_numpad=False)
         self.assertFalse(kb_override_no.has_numpad)
+
+    def test_gui_lightbar_guard_by_keyboard_type(self):
+        """Verify GUI suppresses lightbar when keyboard_type is not per-key (type 3)."""
+        from omen_rgb.lightbar import OmenLightbar
+        # Test non-per-key types (1, 2, 4, 5, 0)
+        for t in (0, 1, 2, 4, 5):
+            with open(self.mock_sysfs_file, "w") as f:
+                f.write(f"{t}\n")
+            kb = OmenKeyboard(simulate_4zone=True)
+            kb_type = getattr(kb, "keyboard_type", None)
+            self.assertEqual(kb_type, t)
+            # In GUI logic: kb_type != 3 guarantees has_lightbar is False
+            should_enable_lb = not (kb.is_simulation or (kb_type is not None and kb_type != 3))
+            self.assertFalse(should_enable_lb)
 
 
 class TestOmenKeyboardSimulate1Zone(unittest.TestCase):

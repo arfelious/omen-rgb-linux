@@ -197,5 +197,69 @@ class TestCLILightbarIntegration(unittest.TestCase):
         self.assertEqual(lb.get_brightness(), 70)
 
 
+class TestOmenLightbarKeyboardType(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.leds_dir = os.path.join(self.temp_dir.name, "leds")
+        os.makedirs(self.leds_dir)
+
+        # Mock 4 lightbar zones
+        for zone in range(1, 5):
+            zdir = os.path.join(self.leds_dir, f"hp::lightbar-{zone}")
+            os.makedirs(zdir)
+            with open(os.path.join(zdir, "multi_index"), "w") as f:
+                f.write("red green blue\n")
+            with open(os.path.join(zdir, "multi_intensity"), "w") as f:
+                f.write("0 0 0\n")
+            with open(os.path.join(zdir, "brightness"), "w") as f:
+                f.write("255\n")
+            with open(os.path.join(zdir, "max_brightness"), "w") as f:
+                f.write("255\n")
+
+        self.mock_kb_type_file = os.path.join(self.temp_dir.name, "keyboard_type")
+
+        self.leds_patcher = patch.object(lightbar, "SYSFS_LEDS_BASE", self.leds_dir)
+        self.kb_type_patcher = patch.object(lightbar, "SYSFS_KEYBOARD_TYPE_FILE", self.mock_kb_type_file)
+        self.leds_patcher.start()
+        self.kb_type_patcher.start()
+
+    def tearDown(self):
+        self.kb_type_patcher.stop()
+        self.leds_patcher.stop()
+        self.temp_dir.cleanup()
+
+    def test_per_key_keyboard_type_3_is_supported(self):
+        with open(self.mock_kb_type_file, "w") as f:
+            f.write("3\n")
+        self.assertEqual(OmenLightbar.get_keyboard_type(), 3)
+        self.assertTrue(OmenLightbar.is_supported())
+        self.assertTrue(OmenLightbar.is_available())
+        self.assertEqual(OmenLightbar._detect_backend(), "sysfs_leds")
+
+    def test_non_per_key_keyboard_types_are_unsupported(self):
+        # 0: No Backlight, 1: 4-Zone w/ Numpad, 2: 4-Zone w/o Numpad, 4: 1-Zone w/ Numpad, 5: 1-Zone w/o Numpad
+        for kb_type in (0, 1, 2, 4, 5):
+            with open(self.mock_kb_type_file, "w") as f:
+                f.write(f"{kb_type}\n")
+            self.assertEqual(OmenLightbar.get_keyboard_type(), kb_type)
+            self.assertFalse(OmenLightbar.is_supported(), f"Expected False for keyboard_type {kb_type}")
+            self.assertFalse(OmenLightbar.is_available(), f"Expected False for keyboard_type {kb_type}")
+            self.assertIsNone(OmenLightbar._detect_backend())
+            with self.assertRaises(RuntimeError) as ctx:
+                OmenLightbar.ensure_available()
+            self.assertIn("per-key RGB keyboards", str(ctx.exception))
+
+    def test_cli_blocks_non_per_key(self):
+        from omen_rgb.cli import main
+        import sys
+        with open(self.mock_kb_type_file, "w") as f:
+            f.write("1\n")
+        test_args = ["omen-rgb", "lightbar", "static", "#ff0000"]
+        with patch.object(sys, "argv", test_args):
+            with self.assertRaises(SystemExit) as cm:
+                main()
+            self.assertEqual(cm.exception.code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

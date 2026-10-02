@@ -350,8 +350,8 @@ class AnimationDialog(tk.Toplevel):
             "desc": "Cycles smooth rainbow colors across the keyboard canvas in software via a background thread.",
         })
 
-        # 3. Hardware MCU effects (if per-key or simulation)
-        if self.kb.is_per_key or getattr(self.kb, "is_simulation", False):
+        # 3. Hardware MCU effects (only if keyboard is per-key RGB)
+        if getattr(self.kb, "is_per_key", False):
             mcu_effects = [
                 ("wave", "Wave", "Smooth color wave sweeping across keyboard keys rendered in hardware (0% CPU).", {"presets": True, "direction": True, "speed": True}),
                 ("color-cycle", "Color Cycle", "All keys cycle in unison through the color spectrum in hardware.", {"presets": True, "speed": True}),
@@ -826,7 +826,8 @@ class OmenGUI:
 
             
         try:
-            if self.kb.is_simulation:
+            kb_type = getattr(self.kb, "keyboard_type", None)
+            if self.kb.is_simulation or (kb_type is not None and kb_type != 3):
                 self.lb = None
                 self.has_lightbar = False
             else:

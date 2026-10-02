@@ -224,7 +224,7 @@ rm -rf ~/.config/omen-rgb ~/.config/omen-rgb-linux
 - **Bottom Lightbar**: Supported via `hp-wmi` (`hp::lightbar-*`) for static control, and `/proc/acpi/call` for hardware animations.
 
 
-## Contribution
+## Contributing
 Pull requests, hardware captures, layout verifications, and notifying about tested hardwares are welcome!
 
 We need testers for both new and some of the existing functionality. If you'd like to test, feel free to mail `arfelious@proton.me`
